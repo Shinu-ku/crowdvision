@@ -1,0 +1,118 @@
+"""CrowdVision Main Backend FastAPI application entrypoint."""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.api.routes import (
+    alerts,
+    analytics,
+    auth,
+    calibration,
+    cameras,
+    chat,
+    events,
+    health,
+    images,
+    layouts,
+    recommendations,
+    reports,
+    venues,
+    videos,
+)
+from app.api.websocket.handler import router as ws_router
+from app.config import get_settings
+from app.core.logging import get_logger, setup_logging
+from app.database.session import close_db, init_db
+
+logger = get_logger("main")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    settings = get_settings()
+    setup_logging(settings.app_log_level)
+
+    # Ensure required upload directories exist
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    settings.floorplans_dir.mkdir(parents=True, exist_ok=True)
+    settings.processed_dir.mkdir(parents=True, exist_ok=True)
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+
+    await init_db()
+    logger.info("CrowdVision Main Backend started", title=settings.app_name)
+
+    yield
+
+    await close_db()
+    logger.info("CrowdVision Main Backend shutdown completed")
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+
+    app = FastAPI(
+        title=settings.app_name,
+        version="1.0.0",
+        description="AI-Powered Predictive Crowd Monitoring and Intelligent Crowd Management Platform",
+        lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    uploads_root = settings.base_dir / settings.upload_dir
+    uploads_root.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(uploads_root)), name="uploads")
+
+    # Mount API routers
+    app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+    app.include_router(events.router, prefix="/api/events", tags=["Events"])
+    app.include_router(venues.router, prefix="/api/venues", tags=["Venues & Zones"])
+    app.include_router(layouts.router, prefix="/api", tags=["Venue Layouts"])
+    app.include_router(calibration.router, prefix="/api", tags=["Camera Calibration"])
+    app.include_router(cameras.router, prefix="/api/cameras", tags=["Cameras"])
+    app.include_router(videos.router, prefix="/api/videos", tags=["Videos & Processing"])
+    app.include_router(images.router, prefix="/api", tags=["Single Image Analysis"])
+    app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics & Predictions"])
+    app.include_router(alerts.router, prefix="/api/alerts", tags=["Alerts"])
+    app.include_router(recommendations.router, prefix="/api/recommendations", tags=["Recommendations"])
+    app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
+    app.include_router(chat.router, prefix="/api/chat", tags=["AI Analyst"])
+    app.include_router(health.router, prefix="/api/health", tags=["Health"])
+    app.include_router(ws_router, tags=["WebSocket"])
+
+    # Mount frontend static distribution if built
+    dist_dir = settings.base_dir.parent / "frontend" / "dist"
+    if dist_dir.exists():
+        assets_dir = dist_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+        @app.get("/", tags=["Frontend"])
+        async def serve_index():
+            return FileResponse(dist_dir / "index.html")
+    else:
+        @app.get("/", tags=["Root"])
+        async def root():
+            return {
+                "app": settings.app_name,
+                "version": "1.0.0",
+                "docs": "/docs",
+                "status": "running",
+            }
+
+    return app
+
+
+app = create_app()
