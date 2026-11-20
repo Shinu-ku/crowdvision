@@ -1,3 +1,4 @@
+
 # CrowdVision: Predictive Crowd Intelligence & Agentic Monitoring
 
 CrowdVision is an intelligent crowd monitoring and predictive spatial safety platform. It integrates computer vision analytics (YOLO person detection, ByteTrack multi-object tracking, and perspective-calibrated zone mapping) with an independent analytical AI Agent to forecast overcrowding risks and recommend mitigation actions.
@@ -83,3 +84,6 @@ $env:PYTHONPATH="ai_agent"; pytest -p pytest_asyncio.plugin ai_agent/tests/ -v
 ## Security & Privacy Notice
 
 CrowdVision does not transmit raw video frames, facial imagery, or personal biometric identities to third-party LLMs. Only structured numerical telemetry (occupancy counts, density indices, and velocity vectors) is evaluated by the intelligence layer.
+=======
+# crowdvision
+cv platform for crowd management
