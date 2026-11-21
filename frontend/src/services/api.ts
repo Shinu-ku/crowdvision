@@ -154,12 +154,17 @@ class ApiService {
     return this.request<VenueLayout[]>(`/layouts/${query}`);
   }
 
+  async getLayout(layoutId: string): Promise<VenueLayout> {
+    return this.request<VenueLayout>(`/layouts/${layoutId}`);
+  }
+
   async createLayout(data: {
     venue_id?: string;
     name: string;
     description?: string;
     canvas_width?: number;
     canvas_height?: number;
+    background_image_url?: string | null;
     zones_data: any[];
     calibration_homography?: number[][];
     camera_perspective?: string;
@@ -167,6 +172,17 @@ class ApiService {
     return this.request<VenueLayout>('/layouts/', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  async uploadLayoutBackground(
+    file: File
+  ): Promise<{ image_url: string; width: number; height: number; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return this.request('/layouts/upload-background', {
+      method: 'POST',
+      body: formData,
     });
   }
 
@@ -402,8 +418,11 @@ class ApiService {
     }
   }
 
-  async getTaskTelemetry(taskId: string): Promise<any> {
-    return this.request(`/tasks/${taskId}/telemetry`);
+  async getTaskTelemetry(taskId: string, ts?: number): Promise<any> {
+    const url = ts !== undefined
+      ? `/tasks/${taskId}/telemetry?ts=${ts.toFixed(2)}`
+      : `/tasks/${taskId}/telemetry`;
+    return this.request(url);
   }
 
   // --- Phase 1: AI Copilot ---

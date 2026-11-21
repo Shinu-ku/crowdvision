@@ -21,6 +21,9 @@ import {
   Settings,
   HelpCircle,
   Plus,
+  Lock,
+  ImagePlus,
+  RefreshCw,
 } from 'lucide-react';
 import { LayoutZoneData, PolygonPoint, VenueLayout } from '../../types';
 import { api } from '../../services/api';
@@ -54,6 +57,7 @@ interface SpatialLayoutBuilderProps {
   layoutId?: string;
   initialName?: string;
   initialZones?: LayoutZoneData[];
+  initialBackgroundImageUrl?: string | null;
   onSaved?: (layout: VenueLayout) => void;
   readOnly?: boolean;
 }
@@ -62,6 +66,7 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
   layoutId,
   initialName = 'Spatial Venue Layout',
   initialZones = [],
+  initialBackgroundImageUrl = null,
   onSaved,
   readOnly = false,
 }) => {
@@ -75,6 +80,13 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
     width: 1920,
     height: 1080,
   });
+
+  // Background Image & Mode State (Default Grid vs Image Background)
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState<string | null>(initialBackgroundImageUrl || null);
+  const [bgImageElement, setBgImageElement] = useState<HTMLImageElement | null>(null);
+  const [showGridOverlayOnImage, setShowGridOverlayOnImage] = useState<boolean>(false);
+  const [isUploadingBg, setIsUploadingBg] = useState<boolean>(false);
+  const bgFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Tools & Viewport
   const [activeTool, setActiveTool] = useState<BuilderTool>('SELECT');
@@ -99,6 +111,58 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
       }),
     }));
   }, []);
+
+  // Preload and cache background image element when URL changes
+  useEffect(() => {
+    if (!backgroundImageUrl) {
+      setBgImageElement(null);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      setBgImageElement(img);
+    };
+    img.onerror = () => {
+      console.warn('Could not load background image:', backgroundImageUrl);
+    };
+    img.src = backgroundImageUrl;
+  }, [backgroundImageUrl]);
+
+  // Load layout details from backend when editing an existing saved layout
+  useEffect(() => {
+    if (!layoutId) {
+      if (initialBackgroundImageUrl !== undefined) {
+        setBackgroundImageUrl(initialBackgroundImageUrl);
+      }
+      return;
+    }
+    let isCancelled = false;
+    const fetchLayout = async () => {
+      try {
+        const layout = await api.getLayout(layoutId);
+        if (isCancelled || !layout) return;
+        if (layout.name) setLayoutName(layout.name);
+        if (layout.description) setDescription(layout.description);
+        if (layout.canvas_width && layout.canvas_height) {
+          setCanvasResolution({ width: layout.canvas_width, height: layout.canvas_height });
+        }
+        setBackgroundImageUrl(layout.background_image_url || null);
+        if (layout.zones_data && layout.zones_data.length > 0) {
+          const normalized = normalizeZoneList(layout.zones_data);
+          setZones(normalized);
+          setHistory([normalized]);
+          setHistoryIndex(0);
+        }
+      } catch (err) {
+        console.warn('Failed to load layout details from server:', err);
+      }
+    };
+    fetchLayout();
+    return () => {
+      isCancelled = true;
+    };
+  }, [layoutId, initialBackgroundImageUrl, normalizeZoneList]);
 
   // Zones & History stack
   const [zones, setZones] = useState<LayoutZoneData[]>(() => {
@@ -274,14 +338,24 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
     ctx.fillStyle = previewMode ? '#030712' : '#070B14';
     ctx.fillRect(0, 0, canvasResolution.width, canvasResolution.height);
 
-    // Canvas boundary shadow
+    // 1b. Render Locked Background Image if configured (Floor plan, aerial photo, or CCTV reference)
+    if (bgImageElement) {
+      try {
+        ctx.drawImage(bgImageElement, 0, 0, canvasResolution.width, canvasResolution.height);
+      } catch (err) {
+        console.error('Error rendering locked background image layer:', err);
+      }
+    }
+
+    // Canvas boundary stroke
     ctx.strokeStyle = '#1E293B';
     ctx.lineWidth = 2 / zoom;
     ctx.strokeRect(0, 0, canvasResolution.width, canvasResolution.height);
 
-    // 2. Grid lines
-    if (showGrid && !previewMode) {
-      ctx.strokeStyle = 'rgba(30, 41, 59, 0.4)';
+    // 2. Grid lines (Default grid canvas, or optional tactical overlay on image)
+    const shouldDrawGrid = !previewMode && (bgImageElement ? showGridOverlayOnImage : showGrid);
+    if (shouldDrawGrid) {
+      ctx.strokeStyle = bgImageElement ? 'rgba(255, 255, 255, 0.15)' : 'rgba(30, 41, 59, 0.4)';
       ctx.lineWidth = 1 / zoom;
       for (let x = 0; x <= canvasResolution.width; x += gridSize) {
         ctx.beginPath();
@@ -449,6 +523,8 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
     gridSize,
     canvasResolution,
     previewMode,
+    bgImageElement,
+    showGridOverlayOnImage,
   ]);
 
   // Mouse Handlers
@@ -672,6 +748,58 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
     setSelectedZoneIndex(zones.length);
   };
 
+  // Background Image Handlers
+  const handleImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingBg(true);
+    setValidationError(null);
+
+    try {
+      // Upload image to backend
+      const res = await api.uploadLayoutBackground(file);
+      if (res && res.image_url) {
+        setBackgroundImageUrl(res.image_url);
+        if (res.width && res.height) {
+          setCanvasResolution({ width: res.width, height: res.height });
+        }
+        setSaveSuccess(`Background image "${file.name}" locked successfully.`);
+      }
+    } catch (err: any) {
+      console.warn('Backend image upload failed, falling back to local file reader:', err);
+      // Fallback: Read as base64 data URL locally so builder functions even without backend
+      const reader = new FileReader();
+      reader.onload = (loadEvt) => {
+        const dataUrl = loadEvt.target?.result as string;
+        if (dataUrl) {
+          const testImg = new window.Image();
+          testImg.onload = () => {
+            if (testImg.naturalWidth && testImg.naturalHeight) {
+              setCanvasResolution({ width: testImg.naturalWidth, height: testImg.naturalHeight });
+            }
+            setBackgroundImageUrl(dataUrl);
+            setSaveSuccess(`Background image "${file.name}" locked successfully.`);
+          };
+          testImg.src = dataUrl;
+        }
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setIsUploadingBg(false);
+      if (bgFileInputRef.current) {
+        bgFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleClearBackground = () => {
+    setBackgroundImageUrl(null);
+    setBgImageElement(null);
+    setShowGridOverlayOnImage(false);
+    setSaveSuccess('Background reverted to default spatial grid.');
+  };
+
   // Save / Update Layout to Backend
   const handleSaveLayout = async () => {
     if (zones.length === 0) {
@@ -684,11 +812,12 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
     setSaveSuccess(null);
 
     try {
-      const payload = {
+      const payload: any = {
         name: layoutName.trim(),
         description: description.trim(),
         canvas_width: canvasResolution.width,
         canvas_height: canvasResolution.height,
+        background_image_url: backgroundImageUrl || null,
         zones_data: zones.map((z) => ({
           id: z.id,
           name: z.name,
@@ -801,6 +930,71 @@ export const SpatialLayoutBuilder: React.FC<SpatialLayoutBuilderProps> = ({
             >
               <Maximize2 className="h-3.5 w-3.5" />
             </button>
+          </div>
+
+          {/* Background Mode & Upload Controls */}
+          <div className="flex items-center space-x-1.5 bg-[#070B14] border border-slate-800 rounded-lg px-2 py-1">
+            {backgroundImageUrl ? (
+              <div className="flex items-center space-x-1.5">
+                <span className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/70 text-amber-300 border border-amber-800/60">
+                  <Lock className="h-2.5 w-2.5" />
+                  <span>IMAGE (LOCKED)</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowGridOverlayOnImage(!showGridOverlayOnImage)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors border ${
+                    showGridOverlayOnImage
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                      : 'text-slate-400 border-slate-800 hover:text-white'
+                  }`}
+                  title="Toggle Tactical Grid Overlay on Background Image"
+                >
+                  Grid: {showGridOverlayOnImage ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bgFileInputRef.current?.click()}
+                  disabled={readOnly}
+                  className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                  title="Replace Background Image"
+                >
+                  Replace
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearBackground}
+                  disabled={readOnly}
+                  className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-950/40 hover:bg-red-900/50 text-red-300 border border-red-800/40 transition-colors"
+                  title="Remove Background Image & Return to Default Grid"
+                >
+                  Reset to Grid
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-1.5">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950/70 text-cyan-300 border border-cyan-800/60">
+                  GRID
+                </span>
+                <button
+                  type="button"
+                  onClick={() => bgFileInputRef.current?.click()}
+                  disabled={isUploadingBg || readOnly}
+                  className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 transition-colors"
+                  title="Upload Custom Image Background (Floor plan, aerial photo, CAD schematic, or CCTV frame)"
+                >
+                  <ImagePlus className="h-3 w-3" />
+                  <span>{isUploadingBg ? 'Uploading...' : 'Add Image Background'}</span>
+                </button>
+              </div>
+            )}
+            <input
+              ref={bgFileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              onChange={handleImageFileUpload}
+              className="hidden"
+            />
           </div>
 
           {/* Preview Toggle */}

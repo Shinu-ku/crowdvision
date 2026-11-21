@@ -200,6 +200,7 @@ async def setup_railway_demo():
                 description="Real spatial layout from CCTV footage of Platform 1 Mumbai Suburban EMU Line (Coach 6008B), including boarding edge, transit walkway, escalator concourse, and yellow track clearance.",
                 canvas_width=width,
                 canvas_height=height,
+                background_image_url="/railway_cctv_reference.jpg",
                 zones_data=zones_data,
                 version=1,
                 is_active=True,
@@ -209,6 +210,7 @@ async def setup_railway_demo():
             l_rec.zones_data = zones_data
             l_rec.canvas_width = width
             l_rec.canvas_height = height
+            l_rec.background_image_url = "/railway_cctv_reference.jpg"
 
         # C. Register / Update Task
         task_id = "task_railway_cctv_analysis"
@@ -243,6 +245,7 @@ async def setup_railway_demo():
             "canvas_width": width,
             "canvas_height": height,
             "camera_perspective": "OBLIQUE_CCTV",
+            "background_image_url": "/railway_cctv_reference.jpg",
             "zones_count": len(zones_data),
             "zones_data": zones_data,
         }

@@ -214,9 +214,11 @@ export const CreateTaskWizard: React.FC<CreateTaskWizardProps> = ({
       }
 
       // Snapshot is frozen copy of current zones
+      const selectedL = savedLayouts.find((l) => l.id === selectedLayoutId);
       const layoutSnapshot = {
         layout_id: layoutIdToUse,
-        name: layoutMode === 'NEW' ? newLayoutName.trim() : (savedLayouts.find((l) => l.id === selectedLayoutId)?.name || 'Custom Layout'),
+        name: layoutMode === 'NEW' ? newLayoutName.trim() : (selectedL?.name || 'Custom Layout'),
+        background_image_url: layoutMode === 'NEW' ? null : (selectedL?.background_image_url || null),
         zones_count: currentZones.length,
         zones_data: currentZones.map((z) => ({
           ...z,
@@ -478,9 +480,20 @@ export const CreateTaskWizard: React.FC<CreateTaskWizardProps> = ({
                             >
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-bold text-white truncate">{l.name}</span>
-                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400">
-                                  v{l.version || 1}
-                                </span>
+                                <div className="flex items-center space-x-1">
+                                  {l.background_image_url ? (
+                                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-700/60">
+                                      IMAGE
+                                    </span>
+                                  ) : (
+                                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-700/60">
+                                      GRID
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400">
+                                    v{l.version || 1}
+                                  </span>
+                                </div>
                               </div>
                               <div className="text-[11px] text-slate-400 mb-3 line-clamp-2">
                                 {l.description || 'Pre-configured surveillance layout'}
@@ -525,8 +538,10 @@ export const CreateTaskWizard: React.FC<CreateTaskWizardProps> = ({
                   </div>
                   <div className="flex-1 rounded-xl overflow-hidden border border-slate-800">
                     <SpatialLayoutBuilder
+                      layoutId={layoutMode === 'EXISTING' ? selectedLayoutId : undefined}
                       initialName={layoutMode === 'NEW' ? newLayoutName : 'Task Layout'}
                       initialZones={currentZones}
+                      initialBackgroundImageUrl={layoutMode === 'EXISTING' ? (savedLayouts.find((l) => l.id === selectedLayoutId)?.background_image_url || null) : null}
                       onSaved={(layout) => {
                         if (layout.zones_data) {
                           setCurrentZones(layout.zones_data.map((z: any) => ({

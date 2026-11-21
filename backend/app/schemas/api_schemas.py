@@ -155,6 +155,7 @@ class VenueLayoutResponse(BaseModel):
     scale_pixels_per_meter: Optional[float] = None
     canvas_width: int = 1920
     canvas_height: int = 1080
+    background_image_url: Optional[str] = None
     zones_data: list[dict[str, Any]] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

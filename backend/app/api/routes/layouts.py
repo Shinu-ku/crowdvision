@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 from typing import Annotated, Optional
+import io
+from pathlib import Path
 import uuid
+from PIL import Image as PILImage
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.zone_mapper import validate_polygon_geometry
+from app.config import get_settings
 from app.database.models import Venue, VenueLayout
 from app.database.session import get_db
 from app.schemas.api_schemas import (
@@ -97,6 +101,7 @@ async def create_layout(
         scale_pixels_per_meter=payload.scale_pixels_per_meter or payload.scale_factor or 18.5,
         canvas_width=payload.canvas_width,
         canvas_height=payload.canvas_height,
+        background_image_url=payload.background_image_url,
         zones_data=serialized_zones,
     )
     db.add(layout)
@@ -171,12 +176,56 @@ async def duplicate_layout(
         scale_pixels_per_meter=src.scale_pixels_per_meter,
         canvas_width=src.canvas_width,
         canvas_height=src.canvas_height,
+        background_image_url=src.background_image_url,
         zones_data=list(src.zones_data or []),
     )
     db.add(copy_layout)
     await db.commit()
     await db.refresh(copy_layout)
     return VenueLayoutResponse.model_validate(copy_layout)
+
+
+@router.post("/upload-background")
+async def upload_background_image(
+    file: UploadFile = File(...),
+):
+    """Upload a floor plan, aerial photo, or schematic as a locked layout background."""
+    settings = get_settings()
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported image format '{ext}'. Allowed: .jpg, .jpeg, .png, .webp",
+        )
+
+    content = await file.read()
+    max_bytes = settings.max_image_size_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Image file exceeds maximum size of {settings.max_image_size_mb}MB",
+        )
+
+    try:
+        pil_img = PILImage.open(io.BytesIO(content))
+        width, height = pil_img.size
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid or unreadable image file: {str(e)}",
+        )
+
+    clean_name = Path(file.filename or "background.jpg").name.replace(" ", "_")
+    stored_name = f"{uuid.uuid4().hex[:12]}_{clean_name}"
+    save_path = settings.floorplans_dir / stored_name
+    save_path.write_bytes(content)
+
+    return {
+        "image_url": f"/uploads/floorplans/{stored_name}",
+        "width": width,
+        "height": height,
+        "filename": file.filename,
+    }
 
 
 @router.delete("/{layout_id}", status_code=status.HTTP_204_NO_CONTENT)

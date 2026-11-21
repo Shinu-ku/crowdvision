@@ -76,6 +76,7 @@ export interface VenueLayout {
   canvas_height?: number;
   scale_pixels_per_meter?: number;
   reference_image_path?: string;
+  background_image_url?: string | null;
   zones_data: LayoutZoneData[];
   calibration_homography?: number[][];
   camera_perspective?: PerspectiveType;
@@ -312,6 +313,7 @@ export interface LayoutSnapshot {
   canvas_width?: number;
   canvas_height?: number;
   scale_pixels_per_meter?: number;
+  background_image_url?: string | null;
   zones_count?: number;
   zones_data: LayoutZoneData[];
   snapshot_created_at?: string;

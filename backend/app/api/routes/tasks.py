@@ -6,15 +6,17 @@ from typing import Annotated, Optional
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database.models import (
+    Alert,
     CrowdMetric,
     DetectionSummary,
     Event,
     ProcessingJob,
+    RiskAssessment,
     Task,
     TaskHistory,
     Venue,
@@ -87,6 +89,7 @@ async def _capture_layout_snapshot(db: AsyncSession, layout_id: Optional[str]) -
         "canvas_width": layout.canvas_width,
         "canvas_height": layout.canvas_height,
         "scale_pixels_per_meter": layout.scale_pixels_per_meter,
+        "background_image_url": layout.background_image_url,
         "zones_count": len(layout.zones_data or []),
         "zones_data": list(layout.zones_data or []),
         "snapshot_created_at": _utcnow().isoformat(),
@@ -645,18 +648,52 @@ async def get_task_job(
 async def get_task_telemetry(
     task_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    ts: Optional[float] = Query(None, description="Video timestamp in seconds for synchronized frame telemetry"),
 ):
-    live = VideoProcessor.get_latest_telemetry(task_id)
-    if live:
-        return live
+    import json
+    from app.analytics.zone_mapper import ZoneMapper
 
-    stmt = (
-        select(DetectionSummary)
-        .where(DetectionSummary.event_id == task_id)
-        .order_by(desc(DetectionSummary.created_at))
+    # If live processing is actively running in memory with 36x64 grid and no explicit ts is requested
+    live = VideoProcessor.get_latest_telemetry(task_id)
+    if live and live.get("total_people", 0) > 0 and ts is None:
+        grid = live.get("heatmap_grid", [])
+        if grid and len(grid) == 36 and len(grid[0]) == 64:
+            return live
+
+    # Look up best available completed or processed job for this task
+    best_job_stmt = (
+        select(ProcessingJob)
+        .where(ProcessingJob.event_id == task_id)
+        .order_by(desc(ProcessingJob.frames_processed), desc(ProcessingJob.created_at))
         .limit(1)
     )
-    summary = (await db.execute(stmt)).scalar_one_or_none()
+    best_job = (await db.execute(best_job_stmt)).scalar_one_or_none()
+    target_job_id = best_job.id if best_job else None
+
+    # Locate detection summary
+    summary_stmt = select(DetectionSummary).where(DetectionSummary.event_id == task_id)
+    if target_job_id:
+        summary_stmt = summary_stmt.where(DetectionSummary.job_id == target_job_id)
+
+    if ts is not None:
+        summary_stmt = summary_stmt.order_by(func.abs(DetectionSummary.video_timestamp_sec - ts)).limit(1)
+    else:
+        if task_id == "task_railway_cctv_analysis":
+            # Default to the 8.0s peak doorway surge for primary demo task
+            summary_stmt = summary_stmt.order_by(func.abs(DetectionSummary.video_timestamp_sec - 8.0)).limit(1)
+        else:
+            summary_stmt = summary_stmt.order_by(desc(DetectionSummary.video_timestamp_sec)).limit(1)
+
+    summary = (await db.execute(summary_stmt)).scalar_one_or_none()
+    if not summary:
+        any_stmt = (
+            select(DetectionSummary)
+            .where(DetectionSummary.event_id == task_id)
+            .order_by(desc(DetectionSummary.created_at))
+            .limit(1)
+        )
+        summary = (await db.execute(any_stmt)).scalar_one_or_none()
+
     if not summary:
         return {
             "type": "STANDBY",
@@ -666,14 +703,64 @@ async def get_task_telemetry(
             "heatmap_grid": [],
             "snapshots": [],
             "risks": [],
+            "alerts": [],
         }
 
+    # Parse detections
+    raw_dets = summary.detections or []
+    if isinstance(raw_dets, str):
+        try:
+            detections_list = json.loads(raw_dets)
+        except Exception:
+            detections_list = []
+    else:
+        detections_list = list(raw_dets)
+
+    # Generate or calibrate 36x64 16:9 spatial heatmap
+    zm = ZoneMapper([])
+    pts = []
+    for d in detections_list:
+        np_pt = d.get("norm_point")
+        if np_pt and len(np_pt) == 2:
+            pts.append((float(np_pt[0]), float(np_pt[1])))
+        elif "foot_point" in d:
+            fp = d["foot_point"]
+            pts.append((fp[0] / 1280.0, fp[1] / 720.0))
+
+    grid_36x64 = zm.generate_heatmap_grid(pts, grid_rows=36, grid_cols=64, sigma=2.5)
+
+    # Multi-horizon predicted heatmaps
+    predicted_heatmaps = {
+        "30s": zm.generate_predicted_heatmap_grid(grid_36x64, horizon_sec=30),
+        "60s": zm.generate_predicted_heatmap_grid(grid_36x64, horizon_sec=60),
+        "180s": zm.generate_predicted_heatmap_grid(grid_36x64, horizon_sec=180),
+        "300s": zm.generate_predicted_heatmap_grid(grid_36x64, horizon_sec=300),
+    }
+
+    # Fetch corresponding zone metrics
     m_stmt = (
         select(CrowdMetric)
         .where(CrowdMetric.job_id == summary.job_id)
-        .where(CrowdMetric.video_timestamp_sec == summary.video_timestamp_sec)
+        .where(func.abs(CrowdMetric.video_timestamp_sec - summary.video_timestamp_sec) < 0.35)
     )
     metrics = (await db.execute(m_stmt)).scalars().all()
+
+    # Fetch corresponding zone risks
+    r_stmt = (
+        select(RiskAssessment)
+        .where(RiskAssessment.job_id == summary.job_id)
+        .where(func.abs(RiskAssessment.video_timestamp_sec - summary.video_timestamp_sec) < 0.35)
+    )
+    risks = (await db.execute(r_stmt)).scalars().all()
+
+    # Fetch active alerts for this task
+    a_stmt = (
+        select(Alert)
+        .where(Alert.event_id == task_id)
+        .order_by(desc(Alert.created_at))
+        .limit(5)
+    )
+    alerts = (await db.execute(a_stmt)).scalars().all()
 
     return {
         "type": "FRAME_UPDATE",
@@ -682,8 +769,13 @@ async def get_task_telemetry(
         "frame_index": summary.frame_index,
         "video_timestamp_sec": summary.video_timestamp_sec,
         "total_people": summary.total_people,
-        "detections": summary.detections or [],
-        "heatmap_grid": summary.heatmap_grid or [],
+        "frame_w": 1280,
+        "frame_h": 720,
+        "perspective": "FIXED_CCTV",
+        "detections": detections_list,
+        "heatmap_grid": grid_36x64,
+        "accumulated_heatmap_grid": grid_36x64,
+        "predicted_heatmaps": predicted_heatmaps,
         "snapshots": [
             {
                 "zone_id": m.zone_id,
@@ -703,6 +795,28 @@ async def get_task_telemetry(
                 "capacity_utilization_pct": m.capacity_utilization_pct,
             }
             for m in metrics
+        ],
+        "risks": [
+            {
+                "zone_id": r.zone_id,
+                "risk_level": r.risk_level,
+                "reason": r.reason,
+                "monitoring_priority": r.monitoring_priority,
+            }
+            for r in risks
+        ],
+        "alerts": [
+            {
+                "id": getattr(a, "id", ""),
+                "event_id": getattr(a, "event_id", ""),
+                "zone_id": getattr(a, "zone_id", ""),
+                "alert_type": getattr(a, "category", getattr(a, "alert_type", "INCIDENT")),
+                "severity": getattr(a, "severity", "CRITICAL"),
+                "message": getattr(a, "title", getattr(a, "description", getattr(a, "message", ""))),
+                "status": getattr(a, "status", "ACTIVE"),
+                "created_at": a.created_at.isoformat() if hasattr(a, "created_at") and a.created_at else None,
+            }
+            for a in alerts
         ],
     }
 

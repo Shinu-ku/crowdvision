@@ -210,8 +210,8 @@ class ZoneMapper:
     def generate_heatmap_grid(
         self,
         normalized_points: list[tuple[float, float]],
-        grid_rows: int = 20,
-        grid_cols: int = 12,
+        grid_rows: int = 36,
+        grid_cols: int = 64,
         sigma: float = 2.0,
         perspective: str = "FIXED_CCTV",
         decay: float = 0.85,

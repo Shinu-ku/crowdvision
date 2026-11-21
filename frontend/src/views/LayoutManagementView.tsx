@@ -167,11 +167,17 @@ export const LayoutManagementView: React.FC<LayoutManagementViewProps> = ({
                 <div>
                   {/* Miniature Vector SVG Preview */}
                   <div className="aspect-video bg-[#050811] border-b border-slate-800/80 relative overflow-hidden flex items-center justify-center">
-                    <img
-                      src="/railway_cctv_reference.jpg"
-                      alt="CCTV Spatial Layout Reference"
-                      className="absolute inset-0 w-full h-full object-cover filter brightness-[0.4] contrast-[1.2]"
-                    />
+                    {layout.background_image_url ? (
+                      <img
+                        src={layout.background_image_url}
+                        alt={`${layout.name} Spatial Layout Reference`}
+                        className="absolute inset-0 w-full h-full object-cover filter brightness-[0.4] contrast-[1.2]"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 bg-[#070B14]">
+                        <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:24px_24px] opacity-40" />
+                      </div>
+                    )}
                     <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1280 720">
                       {zones.map((zone) => {
                         if (!zone.polygon_points || zone.polygon_points.length < 3) return null;
@@ -197,7 +203,16 @@ export const LayoutManagementView: React.FC<LayoutManagementViewProps> = ({
                     </svg>
 
                     <div className="absolute top-2 right-2 flex items-center space-x-1">
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-[#070B14]/80 text-cyan-400 border border-slate-700 backdrop-blur-sm">
+                      {layout.background_image_url ? (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-950/80 text-amber-300 border border-amber-700/60 backdrop-blur-sm">
+                          IMAGE
+                        </span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-700/60 backdrop-blur-sm">
+                          GRID
+                        </span>
+                      )}
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-[#070B14]/80 text-slate-300 border border-slate-700 backdrop-blur-sm">
                         v{layout.version || 1}
                       </span>
                     </div>
@@ -304,11 +319,17 @@ export const LayoutManagementView: React.FC<LayoutManagementViewProps> = ({
             </div>
 
             <div className="aspect-video bg-[#050811] relative overflow-hidden flex items-center justify-center">
-              <img
-                src="/railway_cctv_reference.jpg"
-                alt="CCTV Spatial Layout Reference"
-                className="absolute inset-0 w-full h-full object-cover filter brightness-[0.45] contrast-[1.25]"
-              />
+              {previewLayout.background_image_url ? (
+                <img
+                  src={previewLayout.background_image_url}
+                  alt={`${previewLayout.name} Spatial Layout Reference`}
+                  className="absolute inset-0 w-full h-full object-cover filter brightness-[0.45] contrast-[1.25]"
+                />
+              ) : (
+                <div className="absolute inset-0 bg-[#070B14]">
+                  <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:32px_32px] opacity-45" />
+                </div>
+              )}
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1280 720">
                 {previewLayout.zones_data?.map((z) => {
                   const ptsStr = z.polygon_points

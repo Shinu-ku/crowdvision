@@ -150,6 +150,8 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
   const [videoError, setVideoError] = useState(false);
   const [videoLoading, setVideoLoading] = useState(true);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const lastFetchedTsRef = useRef<number>(-1);
+  const isFetchingRef = useRef<boolean>(false);
 
   // ResizeObserver for exact video overlay sizing
   useEffect(() => {
@@ -242,49 +244,103 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
     };
   }, [activeTask?.id]);
 
-  // Periodic REST polling for job status & telemetry backup
+  // Immediate & Synchronized Telemetry Loading
   useEffect(() => {
     if (!activeTask) return;
 
     let isMounted = true;
-    const fetchJobAndTelemetry = async () => {
+    lastFetchedTsRef.current = -1;
+
+    const loadTaskTelemetry = async (targetTs?: number) => {
       try {
-        const j = await api.getTaskJob(activeTask.id);
-        if (isMounted && j && j.id) {
-          setActiveJob(j);
+        const [j, t] = await Promise.allSettled([
+          api.getTaskJob(activeTask.id),
+          api.getTaskTelemetry(activeTask.id, targetTs),
+        ]);
+
+        if (!isMounted) return;
+
+        if (j.status === 'fulfilled' && j.value) {
+          setActiveJob(j.value);
         }
 
-        // Fetch telemetry snapshot if not currently connected via WS
-        if (!wsConnected) {
-          const t = await api.getTaskTelemetry(activeTask.id);
-          if (isMounted && t && t.type === 'FRAME_UPDATE') {
-            setTelemetry({
-              frame_index: t.frame_index || 0,
-              video_timestamp_sec: t.video_timestamp_sec || 0,
-              progress_pct: t.progress_pct || 0,
-              total_people: t.total_people || 0,
-              detections: t.detections || [],
-              snapshots: t.snapshots || [],
-              heatmap_grid: t.heatmap_grid || [],
-              predicted_heatmaps: t.predicted_heatmaps || {},
-              risks: t.risks || [],
-              predictions: t.predictions || [],
-              alerts: t.alerts || [],
-            });
-          }
+        if (t.status === 'fulfilled' && t.value && (t.value.type === 'FRAME_UPDATE' || t.value.total_people !== undefined)) {
+          setTelemetry({
+            frame_index: t.value.frame_index || 0,
+            video_timestamp_sec: t.value.video_timestamp_sec || 0,
+            progress_pct: t.value.progress_pct || 0,
+            total_people: t.value.total_people || 0,
+            frame_w: t.value.frame_w || 1280,
+            frame_h: t.value.frame_h || 720,
+            perspective: t.value.perspective || 'FIXED_CCTV',
+            detections: t.value.detections || [],
+            snapshots: t.value.snapshots || [],
+            heatmap_grid: t.value.heatmap_grid || [],
+            accumulated_heatmap_grid: t.value.accumulated_heatmap_grid || t.value.heatmap_grid || [],
+            predicted_heatmaps: t.value.predicted_heatmaps || {},
+            risks: t.value.risks || [],
+            predictions: t.value.predictions || [],
+            alerts: t.value.alerts || [],
+          });
+          setEngineError(null);
         }
       } catch {
         // Standby
       }
     };
 
-    fetchJobAndTelemetry();
-    const interval = setInterval(fetchJobAndTelemetry, 3000);
+    loadTaskTelemetry();
+    const interval = setInterval(() => {
+      api.getTaskJob(activeTask.id).then((j) => {
+        if (isMounted && j) setActiveJob(j);
+      }).catch(() => {});
+    }, 4000);
+
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [activeTask?.id, wsConnected]);
+  }, [activeTask?.id]);
+
+  // Video Playback Synchronized Frame Scrubbing
+  useEffect(() => {
+    if (!activeTask) return;
+    // When live inference engine is running via active WebSocket stream, WS handles frame pushes
+    if (activeJob?.status === 'RUNNING' && wsConnected) return;
+
+    const diff = Math.abs(currentTime - lastFetchedTsRef.current);
+    if (diff >= 0.25 && !isFetchingRef.current) {
+      lastFetchedTsRef.current = currentTime;
+      isFetchingRef.current = true;
+      api.getTaskTelemetry(activeTask.id, currentTime)
+        .then((t) => {
+          if (t && (t.type === 'FRAME_UPDATE' || t.total_people !== undefined)) {
+            setTelemetry({
+              frame_index: t.frame_index || 0,
+              video_timestamp_sec: t.video_timestamp_sec || 0,
+              progress_pct: t.progress_pct || 0,
+              total_people: t.total_people || 0,
+              frame_w: t.frame_w || 1280,
+              frame_h: t.frame_h || 720,
+              perspective: t.perspective || 'FIXED_CCTV',
+              detections: t.detections || [],
+              snapshots: t.snapshots || [],
+              heatmap_grid: t.heatmap_grid || [],
+              accumulated_heatmap_grid: t.accumulated_heatmap_grid || t.heatmap_grid || [],
+              predicted_heatmaps: t.predicted_heatmaps || {},
+              risks: t.risks || [],
+              predictions: t.predictions || [],
+              alerts: t.alerts || [],
+            });
+            setEngineError(null);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          isFetchingRef.current = false;
+        });
+    }
+  }, [currentTime, activeTask?.id, activeJob?.status, wsConnected]);
 
   // Video detection overlays drawing
   useEffect(() => {
@@ -696,6 +752,15 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
     if (!videoRef.current) return;
     videoRef.current.currentTime = newTime;
     setCurrentTime(newTime);
+    if (activeTask) {
+      lastFetchedTsRef.current = newTime;
+      api.getTaskTelemetry(activeTask.id, newTime).then((t) => {
+        if (t && (t.type === 'FRAME_UPDATE' || t.total_people !== undefined)) {
+          setTelemetry(t);
+          setEngineError(null);
+        }
+      }).catch(() => {});
+    }
   };
 
   const handleSkip = (seconds: number) => {
@@ -703,6 +768,15 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
     const target = Math.max(0, Math.min(videoRef.current.currentTime + seconds, duration || 9999));
     videoRef.current.currentTime = target;
     setCurrentTime(target);
+    if (activeTask) {
+      lastFetchedTsRef.current = target;
+      api.getTaskTelemetry(activeTask.id, target).then((t) => {
+        if (t && (t.type === 'FRAME_UPDATE' || t.total_people !== undefined)) {
+          setTelemetry(t);
+          setEngineError(null);
+        }
+      }).catch(() => {});
+    }
   };
 
   const handleRetryVideo = () => {
@@ -1332,24 +1406,36 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
             </div>
 
             <div className="aspect-video bg-[#050811] relative flex items-center justify-center overflow-hidden select-none">
-              {/* Ground-Truth Spatial Camera Reference Background */}
-              <img
-                src="/railway_cctv_reference.jpg"
-                alt="Railway Platform CCTV Reference"
-                className="absolute inset-0 w-full h-full object-cover filter brightness-[0.46] contrast-[1.25] saturate-[0.80]"
-              />
-
-              {/* Synchronized Live Footage Layer for Real-Time Operator Telemetry */}
-              {videoSourceUrl && (
-                <video
-                  src={videoSourceUrl}
-                  autoPlay
-                  loop={isLooping}
-                  muted
-                  playsInline
-                  className="absolute inset-0 w-full h-full object-cover opacity-20 mix-blend-screen pointer-events-none"
-                />
-              )}
+              {/* Ground-Truth Spatial Reference Background or Default Neutral Grid */}
+              {(() => {
+                const layoutBg = activeTask?.layout_snapshot?.background_image_url || (activeTask?.id === 'task_railway_cctv_analysis' ? '/railway_cctv_reference.jpg' : null);
+                if (layoutBg) {
+                  return (
+                    <>
+                      <img
+                        src={layoutBg}
+                        alt="Spatial Reference Background"
+                        className="absolute inset-0 w-full h-full object-cover filter brightness-[0.46] contrast-[1.25] saturate-[0.80]"
+                      />
+                      {videoSourceUrl && (
+                        <video
+                          src={videoSourceUrl}
+                          autoPlay
+                          loop={isLooping}
+                          muted
+                          playsInline
+                          className="absolute inset-0 w-full h-full object-cover opacity-20 mix-blend-screen pointer-events-none"
+                        />
+                      )}
+                    </>
+                  );
+                }
+                return (
+                  <div className="absolute inset-0 bg-[#070B14]">
+                    <div className="absolute inset-0 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:28px_28px] opacity-25 pointer-events-none" />
+                  </div>
+                );
+              })()}
 
               {/* Spatial Surveillance HUD Tactical Grid Overlay */}
               <div className="absolute inset-0 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:28px_28px] opacity-20 pointer-events-none" />
