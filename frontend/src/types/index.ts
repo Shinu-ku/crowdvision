@@ -68,20 +68,26 @@ export interface LayoutZoneData {
 
 export interface VenueLayout {
   id: string;
-  venue_id: string;
+  venue_id?: string;
   name: string;
+  description?: string;
+  version?: number;
+  canvas_width?: number;
+  canvas_height?: number;
+  scale_pixels_per_meter?: number;
   reference_image_path?: string;
   zones_data: LayoutZoneData[];
   calibration_homography?: number[][];
   camera_perspective?: PerspectiveType;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface ProcessingJob {
   id: string;
   event_id?: string;
   video_file_id: string;
-  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'STOPPED';
+  status: 'PENDING' | 'QUEUED' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'STOPPED';
   sample_fps: number;
   frames_processed: number;
   total_sampled_frames: number;
@@ -90,6 +96,7 @@ export interface ProcessingJob {
   avg_inference_ms?: number;
   max_people_detected: number;
   camera_perspective: PerspectiveType;
+  detector_backend?: string;
   error_message?: string;
   created_at: string;
 }
@@ -258,3 +265,134 @@ export interface ReportItem {
   };
   created_at: string;
 }
+
+// --- Phase 1: Task Management, Spatial Layout, and Copilot Types ---
+
+export type TaskLifecycleState =
+  | 'DRAFT'
+  | 'CONFIGURING'
+  | 'READY'
+  | 'PROCESSING'
+  | 'LIVE'
+  | 'PAUSED'
+  | 'COMPLETED'
+  | 'FAILED';
+
+export type VideoSourceType = 'FILE' | 'CCTV_STREAM' | 'DRONE_RECORDING';
+
+export interface TaskVideoConfig {
+  source_type: VideoSourceType;
+  file_id?: string;
+  video_id?: string;
+  filename?: string;
+  source_uri?: string;
+  stored_path?: string;
+  stream_url?: string;
+  playback_url?: string;
+  duration_seconds?: number;
+  fps?: number;
+  camera_perspective?: string;
+  sample_fps?: number;
+  auto_process?: boolean;
+  resolution?: string;
+}
+
+export interface TaskAnalysisSettings {
+  detector?: string;
+  confidence_threshold?: number;
+  density_method?: string;
+  risk_hysteresis?: boolean;
+}
+
+export interface LayoutSnapshot {
+  layout_id?: string;
+  name: string;
+  description?: string;
+  version?: number;
+  canvas_width?: number;
+  canvas_height?: number;
+  scale_pixels_per_meter?: number;
+  zones_count?: number;
+  zones_data: LayoutZoneData[];
+  snapshot_created_at?: string;
+}
+
+export interface TaskHistoryItem {
+  id: string;
+  task_id: string;
+  event_type: string;
+  details: Record<string, any>;
+  timestamp: string;
+}
+
+export interface TaskItem {
+  id: string;
+  name: string;
+  description?: string;
+  location?: string;
+  state: TaskLifecycleState;
+  layout_id?: string;
+  layout_snapshot: LayoutSnapshot;
+  video_config: TaskVideoConfig;
+  analysis_settings: TaskAnalysisSettings;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+  history?: TaskHistoryItem[];
+}
+
+export interface CopilotActionProposal {
+  action_type: string;
+  parameters: Record<string, any>;
+  rationale: string;
+  risk_assessment: string;
+  requires_approval: boolean;
+}
+
+export interface CopilotQueryResponse {
+  session_id: string;
+  response: string;
+  source: string;
+  data_sources: string[];
+  action_proposal?: CopilotActionProposal;
+  timestamp: string;
+}
+
+export interface CopilotActionExecuteResponse {
+  success: boolean;
+  action_type: string;
+  result: Record<string, any>;
+  message: string;
+  task_id?: string;
+  timestamp: string;
+}
+
+export interface CopilotToolDefinition {
+  name: string;
+  description: string;
+  category: 'read_only' | 'action';
+  requires_confirmation: boolean;
+  parameters: Record<string, any>;
+}
+
+export interface AlertStats {
+  total: number;
+  active: number;
+  acknowledged: number;
+  resolved: number;
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+}
+
+export interface HistoricalAnalytics {
+  task_id?: string;
+  data_points: number;
+  peak_people: number;
+  timeline: {
+    timestamp_sec: number;
+    total_people: number;
+    zone_counts: Record<string, number>;
+    avg_speed?: number;
+  }[];
+}
+

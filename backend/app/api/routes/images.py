@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database.models import SingleImageAnalysis
 from app.database.session import get_db
 from app.schemas.api_schemas import SingleImageAnalysisResponse

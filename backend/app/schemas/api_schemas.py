@@ -67,21 +67,41 @@ class ZoneLayoutItem(BaseModel):
         if isinstance(data, dict):
             zid = data.get("id") or data.get("zone_id") or str(uuid.uuid4())
             zname = data.get("name") or data.get("zone_name") or zid
-            cap = data.get("capacity") or data.get("max_capacity") or 100
+            raw_cap = data.get("capacity") if data.get("capacity") is not None else data.get("max_capacity")
+            try:
+                cap = int(raw_cap) if raw_cap is not None else 100
+            except (ValueError, TypeError):
+                cap = 100
             data["id"] = zid
             data["zone_id"] = zid
             data["name"] = zname
             data["zone_name"] = zname
-            data["capacity"] = int(cap)
-            data["max_capacity"] = int(cap)
+            data["capacity"] = cap
+            data["max_capacity"] = cap
             pts = data.get("polygon_points")
             if isinstance(pts, list):
                 norm_pts = []
                 for p in pts:
-                    if isinstance(p, dict) and "x" in p and "y" in p:
-                        norm_pts.append([float(p["x"]), float(p["y"])])
+                    if isinstance(p, dict):
+                        px = p.get("x") if p.get("x") is not None else p.get("lng")
+                        py = p.get("y") if p.get("y") is not None else p.get("lat")
+                        if px is None and 0 in p:
+                            px = p[0]
+                        if py is None and 1 in p:
+                            py = p[1]
+                        if px is not None and py is not None:
+                            try:
+                                norm_pts.append([float(px), float(py)])
+                            except (ValueError, TypeError):
+                                pass
                     elif isinstance(p, (list, tuple)) and len(p) >= 2:
-                        norm_pts.append([float(p[0]), float(p[1])])
+                        p0 = p[0]
+                        p1 = p[1]
+                        if p0 is not None and p1 is not None:
+                            try:
+                                norm_pts.append([float(p0), float(p1)])
+                            except (ValueError, TypeError):
+                                pass
                 data["polygon_points"] = norm_pts
         return data
 
@@ -125,7 +145,7 @@ class VenueLayoutResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    venue_id: str
+    venue_id: Optional[str] = None
     event_id: Optional[str] = None
     camera_id: Optional[str] = None
     name: str
@@ -174,6 +194,32 @@ class ZoneCreateRequest(BaseModel):
     density_moderate: Optional[float] = None
     density_high: Optional[float] = None
     density_critical: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_points(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            pts = data.get("polygon_points")
+            if isinstance(pts, list):
+                norm_pts = []
+                for p in pts:
+                    if isinstance(p, dict):
+                        px = p.get("x") if p.get("x") is not None else p.get("lng")
+                        py = p.get("y") if p.get("y") is not None else p.get("lat")
+                        if px is not None and py is not None:
+                            try:
+                                norm_pts.append([float(px), float(py)])
+                            except (ValueError, TypeError):
+                                pass
+                    elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                        p0, p1 = p[0], p[1]
+                        if p0 is not None and p1 is not None:
+                            try:
+                                norm_pts.append([float(p0), float(p1)])
+                            except (ValueError, TypeError):
+                                pass
+                data["polygon_points"] = norm_pts
+        return data
 
 
 class ZoneUpdateRequest(BaseModel):
@@ -553,6 +599,27 @@ class AlertResolveRequest(BaseModel):
     resolution_note: Optional[str] = None
 
 
+class AlertCreateRequest(BaseModel):
+    event_id: str
+    zone_id: Optional[str] = None
+    zone_name: Optional[str] = None
+    category: str = "occupancy_warning"
+    severity: str = "MEDIUM"
+    title: str
+    description: str
+    supporting_measurements: dict[str, Any] = Field(default_factory=dict)
+    source: str = "MANUAL"
+
+
+class AlertStatsResponse(BaseModel):
+    total: int
+    active: int
+    acknowledged: int
+    resolved: int
+    by_severity: dict[str, int]
+    by_category: dict[str, int]
+
+
 class RecommendationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -618,6 +685,10 @@ class HealthResponse(BaseModel):
     detector_backend: str
     active_ws_connections: int
     timestamp: datetime
+    copilot_provider: Optional[str] = "deterministic_grounded_engine"
+    copilot_llm_configured: Optional[bool] = False
+    copilot_tools_count: Optional[int] = 18
+    active_processing_jobs: Optional[int] = 0
 
 
 class SingleImageAnalysisResponse(BaseModel):
@@ -652,3 +723,130 @@ class GeometryValidationResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
     vertex_count: Optional[int] = None
     warnings: list[str] = Field(default_factory=list)
+
+
+# --- Phase 1 Task Schemas ---
+
+class TaskCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    state: str = "DRAFT"
+    layout_id: Optional[str] = None
+    layout_snapshot: Optional[dict[str, Any]] = None
+    video_config: Optional[dict[str, Any]] = None
+    analysis_settings: Optional[dict[str, Any]] = None
+    notes: Optional[str] = None
+
+
+class TaskUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    state: Optional[str] = None
+    layout_id: Optional[str] = None
+    layout_snapshot: Optional[dict[str, Any]] = None
+    video_config: Optional[dict[str, Any]] = None
+    analysis_settings: Optional[dict[str, Any]] = None
+    notes: Optional[str] = None
+
+
+class TaskStateUpdateRequest(BaseModel):
+    state: str
+    reason: Optional[str] = None
+
+
+class TaskHistoryItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    task_id: str
+    event_type: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime
+
+
+class TaskResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    state: str
+    layout_id: Optional[str] = None
+    layout_snapshot: dict[str, Any] = Field(default_factory=dict)
+    video_config: dict[str, Any] = Field(default_factory=dict)
+    analysis_settings: dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    history: Optional[list[TaskHistoryItemResponse]] = None
+
+
+# --- Phase 1 Copilot Schemas ---
+
+class CopilotQueryRequest(BaseModel):
+    task_id: Optional[str] = None
+    message: str
+    session_id: Optional[str] = None
+    context: Optional[dict[str, Any]] = None
+
+
+class CopilotActionProposal(BaseModel):
+    action_type: str
+    parameters: dict[str, Any]
+    rationale: str
+    risk_assessment: str
+    requires_approval: bool = True
+
+
+class CopilotQueryResponse(BaseModel):
+    session_id: str
+    response: str
+    source: str
+    data_sources: list[str] = Field(default_factory=list)
+    action_proposal: Optional[CopilotActionProposal] = None
+    timestamp: datetime
+
+
+class CopilotActionValidateRequest(BaseModel):
+    action_type: str
+    parameters: dict[str, Any]
+    task_id: Optional[str] = None
+
+
+class CopilotActionValidateResponse(BaseModel):
+    is_valid: bool
+    validation_errors: list[str] = Field(default_factory=list)
+    simulated_impact: Optional[str] = None
+    can_execute: bool = False
+
+
+class CopilotActionExecuteRequest(BaseModel):
+    action_type: str
+    parameters: dict[str, Any]
+    task_id: Optional[str] = None
+    confirmed_by: Optional[str] = "operator"
+
+
+class CopilotActionExecuteResponse(BaseModel):
+    success: bool
+    action_type: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    message: str
+    task_id: Optional[str] = None
+    timestamp: datetime
+
+
+class CopilotToolDefinition(BaseModel):
+    name: str
+    description: str
+    category: str  # "read_only" | "action"
+    requires_confirmation: bool
+    parameters: dict[str, Any]
+

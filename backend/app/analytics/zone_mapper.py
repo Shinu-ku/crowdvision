@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+import math
+from typing import NamedTuple, Optional
 
 import cv2
 import numpy as np
+
+
+class PolygonValidationResult(NamedTuple):
+    is_valid: bool
+    errors: list[str]
 
 
 def _ccw(p1: list[float] | tuple[float, float], p2: list[float] | tuple[float, float], p3: list[float] | tuple[float, float]) -> float:
@@ -29,24 +35,24 @@ def _segments_intersect_strictly(
     )
 
 
-def validate_polygon_geometry(points: list[list[float]]) -> tuple[bool, list[str]]:
+def validate_polygon_geometry(points: list[list[float]]) -> PolygonValidationResult:
     errors: list[str] = []
     if not points or len(points) < 3:
         errors.append("A polygon zone requires at least 3 distinct boundary vertices.")
-        return False, errors
+        return PolygonValidationResult(False, errors)
 
     n = len(points)
     for idx, pt in enumerate(points):
         if len(pt) < 2 or not np.isfinite(pt[0]) or not np.isfinite(pt[1]):
             errors.append(f"Vertex {idx} contains non-finite or invalid coordinates.")
-            return False, errors
+            return PolygonValidationResult(False, errors)
 
     for i in range(n):
         p_curr = points[i]
         p_next = points[(i + 1) % n]
         if np.hypot(p_next[0] - p_curr[0], p_next[1] - p_curr[1]) < 1e-5:
             errors.append(f"Vertices at index {i} and {(i + 1) % n} are coincident or too close.")
-            return False, errors
+            return PolygonValidationResult(False, errors)
 
     for i in range(n):
         p1 = points[i]
@@ -58,7 +64,7 @@ def validate_polygon_geometry(points: list[list[float]]) -> tuple[bool, list[str
             p4 = points[(j + 1) % n]
             if _segments_intersect_strictly(p1, p2, p3, p4):
                 errors.append(f"Polygon boundary self-intersects between edges ({i}-{(i+1)%n}) and ({j}-{(j+1)%n}).")
-                return False, errors
+                return PolygonValidationResult(False, errors)
 
     area = 0.0
     for i in range(n):
@@ -67,9 +73,9 @@ def validate_polygon_geometry(points: list[list[float]]) -> tuple[bool, list[str
     area = 0.5 * abs(area)
     if area < 1e-5:
         errors.append("Degenerate polygon with near-zero area.")
-        return False, errors
+        return PolygonValidationResult(False, errors)
 
-    return True, []
+    return PolygonValidationResult(True, [])
 
 
 @dataclass
@@ -126,8 +132,22 @@ class ZoneMapper:
 
         self._contours: dict[str, np.ndarray] = {}
         for z in zones:
-            pts = np.array(z.polygon_points, dtype=np.float32)
-            self._contours[z.zone_id] = pts
+            pts_data = z.polygon_points
+            if pts_data and len(pts_data) >= 3:
+                try:
+                    pts = np.ascontiguousarray(np.array(pts_data, dtype=np.float32))
+                    if pts.ndim == 2 and pts.shape[0] >= 3 and pts.shape[1] == 2:
+                        self._contours[z.zone_id] = pts
+                except Exception:
+                    pass
+
+        # Heatmap density states for temporal smoothing & accumulation
+        self._current_density_grid: Optional[np.ndarray] = None
+        self._accumulated_density_grid: Optional[np.ndarray] = None
+
+    def reset_heatmap_state(self) -> None:
+        self._current_density_grid = None
+        self._accumulated_density_grid = None
 
     @staticmethod
     def compute_homography(
@@ -158,13 +178,33 @@ class ZoneMapper:
         mapped_y = float(projected[0, 0, 1])
         return max(0.0, min(1.0, mapped_x)), max(0.0, min(1.0, mapped_y))
 
-    def find_zone(self, norm_x: float, norm_y: float) -> Optional[ZoneDefinition]:
+    def find_zone(
+        self,
+        norm_x: float,
+        norm_y: float,
+        px: Optional[float] = None,
+        py: Optional[float] = None,
+    ) -> Optional[ZoneDefinition]:
         for z in self.zones:
             contour = self._contours.get(z.zone_id)
-            if contour is None:
+            if contour is None or len(contour) < 3:
                 continue
-            if cv2.pointPolygonTest(contour, (float(norm_x), float(norm_y)), False) >= 0:
-                return z
+            try:
+                # 1. Test normalized coordinates (when contour is in 0..1 normalized space)
+                if cv2.pointPolygonTest(contour, (float(norm_x), float(norm_y)), False) >= 0:
+                    return z
+
+                # 2. Test raw pixel coordinates (when contour is in pixel space)
+                if px is not None and py is not None:
+                    if cv2.pointPolygonTest(contour, (float(px), float(py)), False) >= 0:
+                        return z
+
+                # 3. Test standard coordinate projections (1280x720, 1920x1080, 1000x1000 SVG)
+                for w, h in [(1280.0, 720.0), (1000.0, 1000.0), (1920.0, 1080.0), (640.0, 480.0)]:
+                    if cv2.pointPolygonTest(contour, (float(norm_x * w), float(norm_y * h)), False) >= 0:
+                        return z
+            except Exception:
+                continue
         return None
 
     def generate_heatmap_grid(
@@ -172,28 +212,82 @@ class ZoneMapper:
         normalized_points: list[tuple[float, float]],
         grid_rows: int = 20,
         grid_cols: int = 12,
-        sigma: float = 1.4,
+        sigma: float = 2.0,
+        perspective: str = "FIXED_CCTV",
+        decay: float = 0.85,
+        alpha: float = 0.65,
+        **kwargs: Any,
     ) -> list[list[float]]:
-        grid = np.zeros((grid_rows, grid_cols), dtype=np.float32)
-        if not normalized_points:
-            return grid.tolist()
+        """Constructs an accurate spatial crowd density heatmap from person ground footpoints.
 
+        Uses Gaussian Kernel Density Estimation (KDE), perspective compensation,
+        and temporal exponential smoothing.
+        """
+        instant_grid = np.zeros((grid_rows, grid_cols), dtype=np.float32)
+        if not normalized_points:
+            # Decay existing grid smoothly towards zero
+            if self._current_density_grid is not None and self._current_density_grid.shape == (grid_rows, grid_cols):
+                self._current_density_grid *= float(decay)
+                if float(np.max(self._current_density_grid)) > 0.02:
+                    return np.round(np.clip(self._current_density_grid, 0.0, 1.0), 3).tolist()
+                else:
+                    self._current_density_grid = None
+            return instant_grid.tolist()
+
+        is_drone = perspective.upper() == "DRONE_TOPDOWN"
+
+        # Continuous spatial density mapping
         for nx, ny in normalized_points:
             c = min(grid_cols - 1, max(0, int(nx * grid_cols)))
             r = min(grid_rows - 1, max(0, int(ny * grid_rows)))
-            grid[r, c] += 1.0
+            # Weight contribution: perspective compensation
+            if is_drone:
+                weight = 1.0
+            else:
+                weight = 1.0 + 0.3 * (1.0 - float(ny))
+            instant_grid[r, c] += weight
 
-        if sigma > 0 and len(normalized_points) > 0:
-            ksize = int(round(sigma * 3)) | 1
-            if ksize < 3:
-                ksize = 3
-            grid = cv2.GaussianBlur(grid, (ksize, ksize), sigmaX=sigma, sigmaY=sigma)
+        # Gaussian kernel smoothing
+        eff_sigma = max(0.8, float(sigma))
+        ksize = int(round(eff_sigma * 3.0)) | 1
+        if ksize < 3:
+            ksize = 3
+        smooth_grid = cv2.GaussianBlur(instant_grid, (ksize, ksize), sigmaX=eff_sigma, sigmaY=eff_sigma)
 
-        max_val = float(np.max(grid))
+        # Temporal smoothing: exponential moving average
+        if self._current_density_grid is None or self._current_density_grid.shape != (grid_rows, grid_cols):
+            self._current_density_grid = smooth_grid.copy()
+        else:
+            self._current_density_grid = (
+                alpha * smooth_grid + (1.0 - alpha) * (self._current_density_grid * float(decay))
+            )
+
+        # Accumulated density grid (historical dwell & spatial flow)
+        if self._accumulated_density_grid is None or self._accumulated_density_grid.shape != (grid_rows, grid_cols):
+            self._accumulated_density_grid = smooth_grid.copy()
+        else:
+            self._accumulated_density_grid = (
+                0.08 * smooth_grid + 0.92 * self._accumulated_density_grid
+            )
+
+        max_val = float(np.max(self._current_density_grid))
         if max_val > 1e-6:
-            grid = grid / max_val
+            norm_grid = self._current_density_grid / max_val
+        else:
+            norm_grid = self._current_density_grid
 
-        return np.round(np.clip(grid, 0.0, 1.0), 3).tolist()
+        return np.round(np.clip(norm_grid, 0.0, 1.0), 3).tolist()
+
+    def get_accumulated_heatmap_grid(self, grid_rows: int = 36, grid_cols: int = 64) -> list[list[float]]:
+        """Returns the normalized accumulated spatial traffic / dwell heatmap."""
+        if self._accumulated_density_grid is None or self._accumulated_density_grid.shape != (grid_rows, grid_cols):
+            return np.zeros((grid_rows, grid_cols), dtype=np.float32).tolist()
+        peak = float(np.max(self._accumulated_density_grid))
+        if peak > 1e-6:
+            norm = self._accumulated_density_grid / peak
+        else:
+            norm = self._accumulated_density_grid
+        return np.round(np.clip(norm, 0.0, 1.0), 3).tolist()
 
     def generate_predicted_heatmap_grid(
         self,
@@ -228,14 +322,17 @@ class ZoneMapper:
             else:
                 mult = max(0.2, min(3.0, 1.0 + (rate * time_norm)))
             contour = self._contours.get(z.zone_id)
-            if contour is None:
+            if contour is None or len(contour) < 3:
                 continue
             for r in range(rows):
                 for c in range(cols):
                     nx = (c + 0.5) / cols
                     ny = (r + 0.5) / rows
-                    if cv2.pointPolygonTest(contour, (float(nx), float(ny)), False) >= 0:
-                        scaled[r, c] *= mult
+                    try:
+                        if cv2.pointPolygonTest(contour, (float(nx), float(ny)), False) >= 0:
+                            scaled[r, c] *= mult
+                    except Exception:
+                        continue
 
         # Advection
         advected = np.zeros_like(scaled)

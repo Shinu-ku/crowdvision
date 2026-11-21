@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import datetime, timezone
 import io
 from typing import Annotated, Optional
 
@@ -154,7 +154,7 @@ async def generate_report(
         },
         "recommendations_count": len(recs),
         "predictions_generated": len(preds),
-        "generated_timestamp": datetime.utcnow().isoformat(),
+        "generated_timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     report_record = ReportRecord(

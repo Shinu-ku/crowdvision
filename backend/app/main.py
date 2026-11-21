@@ -16,12 +16,14 @@ from app.api.routes import (
     calibration,
     cameras,
     chat,
+    copilot,
     events,
     health,
     images,
     layouts,
     recommendations,
     reports,
+    tasks,
     venues,
     videos,
 )
@@ -45,6 +47,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings.images_dir.mkdir(parents=True, exist_ok=True)
 
     await init_db()
+
+    # Auto-initialize Railway CCTV demonstration if video exists
+    try:
+        from app.scripts.setup_railway_demo import setup_railway_demo
+        await setup_railway_demo()
+    except Exception as e:
+        logger.warning("Railway demo auto-init skipped", error=str(e))
+
     logger.info("CrowdVision Main Backend started", title=settings.app_name)
 
     yield
@@ -77,6 +87,8 @@ def create_app() -> FastAPI:
 
     # Mount API routers
     app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+    app.include_router(tasks.router, prefix="/api", tags=["Tasks"])
+    app.include_router(copilot.router, prefix="/api", tags=["AI Copilot"])
     app.include_router(events.router, prefix="/api/events", tags=["Events"])
     app.include_router(venues.router, prefix="/api/venues", tags=["Venues & Zones"])
     app.include_router(layouts.router, prefix="/api", tags=["Venue Layouts"])

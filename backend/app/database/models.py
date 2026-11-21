@@ -431,3 +431,35 @@ class SingleImageAnalysis(Base):
 # Aliases for backwards and route compatibility
 Prediction = PredictionRecord
 Report = ReportRecord
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    state: Mapped[str] = mapped_column(String(32), default="DRAFT", index=True)
+    layout_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("venue_layouts.id", ondelete="SET NULL"), nullable=True)
+    layout_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    video_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    analysis_settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    history: Mapped[list["TaskHistory"]] = relationship("TaskHistory", back_populates="task", cascade="all, delete-orphan", order_by="desc(TaskHistory.timestamp)", lazy="selectin")
+
+
+class TaskHistory(Base):
+    __tablename__ = "task_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="history")
+

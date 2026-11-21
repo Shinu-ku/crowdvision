@@ -120,7 +120,17 @@ async def update_layout(
     if "zones_data" in data and data["zones_data"] is not None:
         validated_zones = []
         for z in payload.zones_data:
-            z_dict = z.model_dump(by_alias=True)
+            z_dict = z.model_dump()
+            zid = z.id or getattr(z, "zone_id", None) or str(uuid.uuid4())
+            zname = getattr(z, "name", None) or getattr(z, "zone_name", None) or zid
+            cap = getattr(z, "capacity", None) or getattr(z, "max_capacity", None) or 100
+            z_dict["id"] = zid
+            z_dict["zone_id"] = zid
+            z_dict["name"] = zname
+            z_dict["zone_name"] = zname
+            z_dict["capacity"] = int(cap)
+            z_dict["max_capacity"] = int(cap)
+
             if "polygon_points" in z_dict and z_dict["polygon_points"]:
                 is_valid, errs = validate_polygon_geometry(z_dict["polygon_points"])
                 if not is_valid:

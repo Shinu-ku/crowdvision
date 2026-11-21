@@ -1,7 +1,7 @@
 """Chat endpoint proxying operator inquiries to the AI Agent with robust database grounding fallback."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Optional
 import uuid
 
@@ -51,7 +51,7 @@ async def chat_with_analyst(
             data_sources=agent_response.get("data_sources", ["ai_agent"]),
             is_data_stale=agent_response.get("is_data_stale", False),
             stale_warning=agent_response.get("stale_warning"),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
     # Pure deterministic DB-grounded intelligence fallback
@@ -63,7 +63,7 @@ async def chat_with_analyst(
         data_sources=sources,
         is_data_stale=False,
         stale_warning=None,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 

@@ -12,6 +12,9 @@ import {
   EventZoneSummary,
   ReportItem,
   User,
+  TaskItem,
+  TaskHistoryItem,
+  CopilotQueryResponse,
 } from '../types';
 
 const API_BASE = '/api';
@@ -152,8 +155,11 @@ class ApiService {
   }
 
   async createLayout(data: {
-    venue_id: string;
+    venue_id?: string;
     name: string;
+    description?: string;
+    canvas_width?: number;
+    canvas_height?: number;
     zones_data: any[];
     calibration_homography?: number[][];
     camera_perspective?: string;
@@ -264,6 +270,237 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ event_id: eventId, message }),
     });
+  }
+
+  // --- Layout Management Extensions ---
+  async updateLayout(layoutId: string, data: any): Promise<VenueLayout> {
+    return this.request<VenueLayout>(`/layouts/${layoutId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async duplicateLayout(layoutId: string): Promise<VenueLayout> {
+    return this.request<VenueLayout>(`/layouts/${layoutId}/duplicate`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteLayout(layoutId: string): Promise<void> {
+    return this.request<void>(`/layouts/${layoutId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async validateGeometry(points: [number, number][]): Promise<{
+    is_valid: boolean;
+    errors: string[];
+    vertex_count: number;
+    warnings: string[];
+  }> {
+    return this.request('/validate-geometry', {
+      method: 'POST',
+      body: JSON.stringify({ polygon_points: points }),
+    });
+  }
+
+  // --- Phase 1: Tasks System ---
+  async getTasks(params?: { state?: string; search?: string }): Promise<TaskItem[]> {
+    const searchParams = new URLSearchParams();
+    if (params?.state && params.state !== 'ALL') searchParams.append('state', params.state);
+    if (params?.search) searchParams.append('search', params.search);
+    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
+    return this.request<TaskItem[]>(`/tasks${query}`);
+  }
+
+  async getTask(id: string): Promise<TaskItem> {
+    return this.request<TaskItem>(`/tasks/${id}`);
+  }
+
+  async createTask(data: {
+    name: string;
+    description?: string;
+    location?: string;
+    state?: string;
+    layout_id?: string;
+    layout_snapshot?: any;
+    video_config?: any;
+    analysis_settings?: any;
+    notes?: string;
+  }): Promise<TaskItem> {
+    return this.request<TaskItem>('/tasks/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTask(id: string, data: Partial<TaskItem>): Promise<TaskItem> {
+    return this.request<TaskItem>(`/tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async duplicateTask(id: string): Promise<TaskItem> {
+    return this.request<TaskItem>(`/tasks/${id}/duplicate`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    return this.request<void>(`/tasks/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async changeTaskState(id: string, state: string, reason?: string): Promise<TaskItem> {
+    return this.request<TaskItem>(`/tasks/${id}/state`, {
+      method: 'POST',
+      body: JSON.stringify({ state, reason }),
+    });
+  }
+
+  async getTaskHistory(id: string): Promise<TaskHistoryItem[]> {
+    return this.request<TaskHistoryItem[]>(`/tasks/${id}/history`);
+  }
+
+  async startTaskProcessing(taskId: string, payload?: {
+    sample_fps?: number;
+    camera_perspective?: string;
+    video_id?: string;
+    layout_id?: string;
+  }): Promise<ProcessingJob> {
+    return this.request<ProcessingJob>(`/tasks/${taskId}/process`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    });
+  }
+
+  async pauseTaskProcessing(taskId: string): Promise<{ task_id: string; job_id?: string; status: string }> {
+    return this.request(`/tasks/${taskId}/pause`, {
+      method: 'POST',
+    });
+  }
+
+  async resumeTaskProcessing(taskId: string): Promise<{ task_id: string; job_id?: string; status: string }> {
+    return this.request(`/tasks/${taskId}/resume`, {
+      method: 'POST',
+    });
+  }
+
+  async stopTaskProcessing(taskId: string): Promise<{ task_id: string; job_id?: string; status: string }> {
+    return this.request(`/tasks/${taskId}/stop`, {
+      method: 'POST',
+    });
+  }
+
+  async getTaskJob(taskId: string): Promise<ProcessingJob | null> {
+    try {
+      return await this.request<ProcessingJob>(`/tasks/${taskId}/job`);
+    } catch {
+      return null;
+    }
+  }
+
+  async getTaskTelemetry(taskId: string): Promise<any> {
+    return this.request(`/tasks/${taskId}/telemetry`);
+  }
+
+  // --- Phase 1: AI Copilot ---
+  async getCopilotStatus(): Promise<{
+    status: string;
+    active_provider: string;
+    is_llm_configured: boolean;
+    fallback_mode: string;
+    available_tools: any[];
+    agent_service_connected: boolean;
+  }> {
+    return this.request('/copilot/status');
+  }
+
+  async queryCopilot(data: {
+    task_id?: string;
+    message: string;
+    session_id?: string;
+  }): Promise<CopilotQueryResponse> {
+    return this.request<CopilotQueryResponse>('/copilot/query', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async validateCopilotAction(data: {
+    action_type: string;
+    parameters: any;
+    task_id?: string;
+  }): Promise<{
+    is_valid: boolean;
+    validation_errors: string[];
+    simulated_impact?: string;
+    can_execute: boolean;
+  }> {
+    return this.request('/copilot/validate-action', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async executeCopilotAction(data: {
+    action_type: string;
+    parameters: any;
+    task_id?: string;
+    confirmed_by?: string;
+  }): Promise<{
+    success: boolean;
+    action_type: string;
+    result: any;
+    message: string;
+    task_id?: string;
+    timestamp: string;
+  }> {
+    return this.request('/copilot/execute-action', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getCopilotTools(): Promise<any[]> {
+    return this.request('/copilot/tools');
+  }
+
+  async getAlertStats(eventId?: string): Promise<any> {
+    const query = eventId ? `?event_id=${eventId}` : '';
+    return this.request(`/alerts/stats${query}`);
+  }
+
+  async createAlert(data: {
+    event_id: string;
+    zone_id?: string;
+    zone_name?: string;
+    category?: string;
+    severity?: string;
+    title: string;
+    description: string;
+    supporting_measurements?: any;
+    source?: string;
+  }): Promise<AlertItem> {
+    return this.request<AlertItem>('/alerts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getHistoricalAnalytics(params?: {
+    task_id?: string;
+    start_ts?: number;
+    end_ts?: number;
+  }): Promise<any> {
+    const searchParams = new URLSearchParams();
+    if (params?.task_id) searchParams.append('task_id', params.task_id);
+    if (params?.start_ts !== undefined) searchParams.append('start_ts', params.start_ts.toString());
+    if (params?.end_ts !== undefined) searchParams.append('end_ts', params.end_ts.toString());
+    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
+    return this.request(`/analytics/history${query}`);
   }
 
   // --- Reports ---

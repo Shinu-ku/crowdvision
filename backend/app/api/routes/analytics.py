@@ -288,6 +288,7 @@ async def get_risk_assessments(
 
 
 @router.get("/zones/{event_id}/summary")
+@router.get("/tasks/{event_id}/summary")
 @router.get("/events/{event_id}/summary", include_in_schema=False)
 async def get_event_zone_summary(
     event_id: str,
@@ -315,7 +316,15 @@ async def get_event_zone_summary(
         ).scalar_one_or_none()
 
     if not latest_job:
-        return {"event_id": event_id, "status": "NO_ANALYSIS", "zones": [], "trend_series": [], "total_occupancy": 0}
+        return {
+            "event_id": event_id,
+            "status": "NO_ANALYSIS",
+            "total_people": 0,
+            "zone_count": 0,
+            "zones": [],
+            "trend_series": [],
+            "total_occupancy": 0,
+        }
 
     latest_ts = (
         await db.execute(
@@ -326,7 +335,15 @@ async def get_event_zone_summary(
     ).scalar_one_or_none()
 
     if latest_ts is None:
-        return {"event_id": event_id, "status": latest_job.status, "zones": [], "trend_series": [], "total_occupancy": 0}
+        return {
+            "event_id": event_id,
+            "status": latest_job.status,
+            "total_people": 0,
+            "zone_count": 0,
+            "zones": [],
+            "trend_series": [],
+            "total_occupancy": 0,
+        }
 
     metrics = (
         await db.execute(
@@ -429,4 +446,63 @@ async def get_event_zone_summary(
         "zone_count": len(zone_summaries),
         "zones": zone_summaries,
         "trend_series": trend_series,
+    }
+
+
+@router.get("/history")
+async def get_historical_analytics(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    task_id: Annotated[Optional[str], Query()] = None,
+    event_id: Annotated[Optional[str], Query()] = None,
+    start_ts: Annotated[Optional[float], Query()] = None,
+    end_ts: Annotated[Optional[float], Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+):
+    """Retrieve historical crowd analytics across time for charting and retrospective analysis."""
+    target_id = task_id or event_id
+    stmt = select(CrowdMetric).order_by(CrowdMetric.video_timestamp_sec.asc())
+    if target_id:
+        stmt = stmt.where(CrowdMetric.event_id == target_id)
+    if start_ts is not None:
+        stmt = stmt.where(CrowdMetric.video_timestamp_sec >= start_ts)
+    if end_ts is not None:
+        stmt = stmt.where(CrowdMetric.video_timestamp_sec <= end_ts)
+    stmt = stmt.limit(limit)
+
+    metrics = (await db.execute(stmt)).scalars().all()
+
+    # Aggregate by timestamp bucket
+    by_ts: dict[float, dict[str, Any]] = {}
+    for m in metrics:
+        t = round(m.video_timestamp_sec, 1)
+        entry = by_ts.setdefault(
+            t,
+            {
+                "timestamp_sec": t,
+                "total_people": 0,
+                "zone_counts": {},
+                "avg_speed": 0.0,
+                "_count": 0,
+            },
+        )
+        entry["total_people"] += m.people_count
+        entry["zone_counts"][m.zone_name] = m.people_count
+        if m.avg_speed:
+            entry["avg_speed"] += m.avg_speed
+        entry["_count"] += 1
+
+    timeline: list[dict[str, Any]] = []
+    for t in sorted(by_ts.keys()):
+        item = by_ts[t]
+        c = max(item.pop("_count", 1), 1)
+        item["avg_speed"] = round(item["avg_speed"] / c, 2)
+        timeline.append(item)
+
+    peak_people = max((pt["total_people"] for pt in timeline), default=0)
+
+    return {
+        "task_id": target_id,
+        "data_points": len(timeline),
+        "peak_people": peak_people,
+        "timeline": timeline,
     }

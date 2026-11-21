@@ -73,7 +73,7 @@ class CrowdAnalyticsEngine:
             nx, ny = self.mapper.project_point(fx, fy, frame_w, frame_h)
             norm_points.append((nx, ny))
 
-            assigned_zone = self.mapper.find_zone(nx, ny)
+            assigned_zone = self.mapper.find_zone(nx, ny, px=fx, py=fy)
             assigned_zid = assigned_zone.zone_id if assigned_zone else None
             current_track_zones[person.track_id] = assigned_zid
 
@@ -90,7 +90,13 @@ class CrowdAnalyticsEngine:
             serialized_detections.append(
                 {
                     "track_id": person.track_id,
-                    "bbox": list(person.bbox),
+                    "bbox": [round(float(c), 1) for c in person.bbox],
+                    "norm_bbox": [
+                        round(max(0.0, min(1.0, float(person.bbox[0]) / max(float(frame_w), 1.0))), 4),
+                        round(max(0.0, min(1.0, float(person.bbox[1]) / max(float(frame_h), 1.0))), 4),
+                        round(max(0.0, min(1.0, float(person.bbox[2]) / max(float(frame_w), 1.0))), 4),
+                        round(max(0.0, min(1.0, float(person.bbox[3]) / max(float(frame_h), 1.0))), 4),
+                    ],
                     "confidence": round(float(person.confidence), 2),
                     "foot_point": [round(float(fx), 1), round(float(fy), 1)],
                     "norm_point": [round(float(nx), 4), round(float(ny), 4)],
@@ -98,6 +104,8 @@ class CrowdAnalyticsEngine:
                     "zone_name": assigned_zone.name if assigned_zone else "UNASSIGNED",
                     "vx": round(float(person.vx), 3),
                     "vy": round(float(person.vy), 3),
+                    "speed": round(float(person.speed), 3),
+                    "trajectory": [[round(pt[0], 1), round(pt[1], 1)] for pt in getattr(person, "history", [])],
                 }
             )
 
@@ -168,8 +176,12 @@ class CrowdAnalyticsEngine:
                 )
             )
 
-        heatmap_grid = self.mapper.generate_heatmap_grid(norm_points)
+        perspective = getattr(self, "perspective", "FIXED_CCTV")
+        heatmap_grid = self.mapper.generate_heatmap_grid(norm_points, perspective=perspective)
         return snapshots, serialized_detections, heatmap_grid
+
+    def get_accumulated_heatmap_grid(self) -> list[list[float]]:
+        return self.mapper.get_accumulated_heatmap_grid()
 
     def _analyze_movement(
         self, members: list[TrackedPerson], frame_w: int, frame_h: int

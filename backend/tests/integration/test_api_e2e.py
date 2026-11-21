@@ -48,8 +48,11 @@ async def test_full_platform_e2e_workflow(tmp_path: Path):
         assert events_res.status_code == 200
         events = events_res.json()
         assert len(events) >= 1
-        event_id = events[0]["id"]
-        venue_id = events[0]["venue_id"]
+        # Target an isolated event that is not the permanent railway demonstration task
+        non_demo_events = [e for e in events if e.get("id") != "task_railway_cctv_analysis"]
+        target_event = non_demo_events[0] if non_demo_events else events[0]
+        event_id = target_event["id"]
+        venue_id = target_event["venue_id"]
 
         # 5. Venue & Zones
         venue_res = await client.get(f"/api/venues/{venue_id}", headers=headers)

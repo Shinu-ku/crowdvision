@@ -57,6 +57,7 @@ class STrack:
     lost_frames: int = 0
     vx: float = 0.0
     vy: float = 0.0
+    history: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def center(self) -> tuple[float, float]:
@@ -81,13 +82,18 @@ class STrack:
         dy = self.vy * dt
         self.bbox = self.bbox + np.array([dx, dy, dx, dy], dtype=np.float32)
 
-    def update(self, new_bbox: np.ndarray, confidence: float, frame_id: int, dt: float) -> None:
+    def update(self, new_bbox: np.ndarray, confidence: float, frame_id: int, dt: float, perspective: str = "FIXED_CCTV") -> None:
         old_cx, old_cy = self.center
         self.bbox = new_bbox.astype(np.float32)
         self.confidence = float(confidence)
         self.frame_id = frame_id
         self.state = "TRACKED"
         self.lost_frames = 0
+
+        gc = self.ground_contact(perspective)
+        self.history.append(gc)
+        if len(self.history) > 20:
+            self.history.pop(0)
 
         new_cx, new_cy = self.center
         if dt > 1e-4:
@@ -108,6 +114,7 @@ class TrackedPerson:
     foot_point: tuple[float, float]
     vx: float
     vy: float
+    history: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def speed(self) -> float:
@@ -196,7 +203,7 @@ class ByteTracker:
         for t_idx, d_idx in matches1:
             tr = pool[t_idx]
             det = high_dets[d_idx]
-            tr.update(np.array(det.bbox, dtype=np.float32), det.confidence, self._frame_id, dt)
+            tr.update(np.array(det.bbox, dtype=np.float32), det.confidence, self._frame_id, dt, perspective=perspective)
             activated.append(tr)
 
         rem_tracked = [pool[i] for i in unmatched_pool_idx if pool[i].state == "TRACKED"]
@@ -210,7 +217,7 @@ class ByteTracker:
         for t_idx, d_idx in matches2:
             tr = rem_tracked[t_idx]
             det = low_dets[d_idx]
-            tr.update(np.array(det.bbox, dtype=np.float32), det.confidence, self._frame_id, dt)
+            tr.update(np.array(det.bbox, dtype=np.float32), det.confidence, self._frame_id, dt, perspective=perspective)
             activated.append(tr)
 
         new_lost: list[STrack] = []
@@ -237,6 +244,7 @@ class ByteTracker:
                 frame_id=self._frame_id,
                 state="TRACKED",
             )
+            new_tr.history.append(new_tr.ground_contact(perspective))
             self._next_id += 1
             activated.append(new_tr)
 
@@ -253,6 +261,7 @@ class ByteTracker:
                     foot_point=tr.ground_contact(perspective),
                     vx=tr.vx,
                     vy=tr.vy,
+                    history=list(tr.history),
                 )
             )
 

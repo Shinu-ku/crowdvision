@@ -3,10 +3,11 @@ import {
   LayoutDashboard,
   Video,
   Layers,
-  Flame,
-  TrendingUp,
-  AlertTriangle,
+  Compass,
+  Square,
   Bot,
+  AlertTriangle,
+  History,
   FileSpreadsheet,
   Settings,
   PlusCircle,
@@ -15,13 +16,13 @@ import {
 } from 'lucide-react';
 
 export type NavTab =
-  | 'dashboard'
-  | 'tasks'
   | 'monitoring'
+  | 'tasks'
+  | 'layouts'
   | 'layout-builder'
-  | 'predictions'
+  | 'copilot'
   | 'alerts'
-  | 'chat'
+  | 'history'
   | 'reports'
   | 'settings';
 
@@ -41,14 +42,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   agentStatus = 'connected',
 }) => {
   const navItems: { id: NavTab; label: string; icon: React.FC<{ className?: string }>; badge?: number }[] = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
-    { id: 'monitoring', label: 'Live Video & Heatmap', icon: Video },
-    { id: 'tasks', label: 'All Tasks', icon: Layers },
-    { id: 'layout-builder', label: 'Layout Builder', icon: Layers },
-    { id: 'predictions', label: 'Predictions', icon: TrendingUp },
+    { id: 'monitoring', label: 'Monitoring Console', icon: Video },
+    { id: 'tasks', label: 'Tasks Management', icon: Layers },
+    { id: 'layouts', label: 'Spatial Layouts', icon: Compass },
+    { id: 'layout-builder', label: 'Layout Builder', icon: Square },
+    { id: 'copilot', label: 'AI Copilot', icon: Bot },
     { id: 'alerts', label: 'Alerts Center', icon: AlertTriangle, badge: alertCount },
-    { id: 'chat', label: 'AI Crowd Analyst', icon: Bot },
-    { id: 'reports', label: 'Post-Event Reports', icon: FileSpreadsheet },
+    { id: 'history', label: 'Audit History', icon: History },
+    { id: 'reports', label: 'Reports', icon: FileSpreadsheet },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 

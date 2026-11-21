@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import time
@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.cv.bytetrack import ByteTracker
 from app.cv.camera_motion import CameraMotionCompensator
 from app.cv.detector import PersonDetector, assess_footage_perspective
+from app.cv.video_source import BaseVideoSource, SourceState, create_video_source
 from app.database.models import (
     Alert,
     Camera,
@@ -32,6 +33,7 @@ from app.database.models import (
     ProcessingJob,
     Recommendation,
     RiskAssessment,
+    Task,
     Venue,
     VenueLayout,
     VideoFile,
@@ -57,10 +59,12 @@ def get_shared_detector() -> PersonDetector:
 
 
 class VideoProcessor:
-    """Orchestrates asynchronous recorded video analysis jobs."""
+    """Orchestrates asynchronous recorded video analysis jobs with OpenCV, YOLO, ByteTrack, prediction, risk, alerts, and AI agent integration."""
 
     _active_jobs: dict[str, bool] = {}
+    _paused_jobs: dict[str, bool] = {}
     _running_tasks: dict[str, asyncio.Task[Any]] = {}
+    _latest_telemetry: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def launch_job(
@@ -74,6 +78,7 @@ class VideoProcessor:
         camera_perspective: str = "FIXED_CCTV",
     ) -> None:
         cls._active_jobs[job_id] = True
+        cls._paused_jobs[job_id] = False
         task = asyncio.create_task(
             cls.start_processing(
                 job_id=job_id,
@@ -88,9 +93,30 @@ class VideoProcessor:
         cls._running_tasks[job_id] = task
 
     @classmethod
+    def pause_processing(cls, job_id: str) -> bool:
+        if job_id in cls._active_jobs:
+            cls._paused_jobs[job_id] = True
+            logger.info("Video processing paused", job_id=job_id)
+            return True
+        return False
+
+    @classmethod
+    def resume_processing(cls, job_id: str) -> bool:
+        if job_id in cls._active_jobs:
+            cls._paused_jobs[job_id] = False
+            logger.info("Video processing resumed", job_id=job_id)
+            return True
+        return False
+
+    @classmethod
+    def is_paused(cls, job_id: str) -> bool:
+        return cls._paused_jobs.get(job_id, False)
+
+    @classmethod
     def stop_processing(cls, job_id: str) -> bool:
         if job_id in cls._active_jobs:
             cls._active_jobs[job_id] = False
+            cls._paused_jobs.pop(job_id, None)
             task = cls._running_tasks.get(job_id)
             if task and not task.done():
                 task.cancel()
@@ -100,6 +126,10 @@ class VideoProcessor:
     @classmethod
     def is_running(cls, job_id: str) -> bool:
         return cls._active_jobs.get(job_id, False)
+
+    @classmethod
+    def get_latest_telemetry(cls, key: str) -> Optional[dict[str, Any]]:
+        return cls._latest_telemetry.get(key)
 
     @classmethod
     async def start_processing(
@@ -124,30 +154,58 @@ class VideoProcessor:
                 logger.error("Processing job not found", job_id=job_id)
                 return
             job.status = "RUNNING"
-            job.started_at = datetime.utcnow()
+            job.started_at = datetime.now(timezone.utc)
             job.detector_backend = detector.backend_name
             job.camera_perspective = camera_perspective
             if layout_id:
                 job.layout_id = layout_id
             await session.commit()
 
-            video = await session.get(VideoFile, video_id)
-            if not video:
-                logger.error("Video file not found", video_id=video_id)
-                job.status = "FAILED"
-                job.error_message = f"Video file {video_id} not found"
-                await session.commit()
-                return
+            video_path = None
+            if video_id:
+                video = await session.get(VideoFile, video_id)
+                if video:
+                    video_path = video.stored_path
 
-            video_path = video.stored_path
             event = await session.get(Event, event_id)
             venue_id = event.venue_id if event else None
+
+            # Look up Task record for snapshot zones or configured video
+            task = await session.get(Task, event_id)
+            if not video_path and task and task.video_config:
+                vcfg = task.video_config
+                cand = vcfg.get("stored_path") or vcfg.get("source_uri") or vcfg.get("filename")
+                if cand:
+                    if os.path.exists(cand):
+                        video_path = cand
+                    elif (get_settings().videos_dir / Path(cand).name).exists():
+                        video_path = str(get_settings().videos_dir / Path(cand).name)
+
+            if not video_path and video_id:
+                cand = get_settings().videos_dir / Path(video_id).name
+                if cand.exists():
+                    video_path = str(cand)
+
+            if not video_path:
+                default_file = get_settings().videos_dir / "sample_crowd_festival.mp4"
+                if default_file.exists():
+                    video_path = str(default_file)
+
+            if not video_path:
+                logger.error("No valid video source found for job", job_id=job_id)
+                job.status = "FAILED"
+                job.error_message = f"No valid video source found for {video_id or event_id}"
+                await session.commit()
+                return
 
             # Build zones & homography
             zone_defs: list[ZoneDefinition] = []
             calibration_homography = None
 
-            if layout_id:
+            if task and task.layout_snapshot and task.layout_snapshot.get("zones_data"):
+                zone_defs = cls._build_zone_definitions_from_snapshot(task.layout_snapshot.get("zones_data", []))
+                calibration_homography = task.layout_snapshot.get("calibration_homography")
+            elif layout_id:
                 layout = await session.get(VenueLayout, layout_id)
                 if layout:
                     zone_defs = cls._build_zone_definitions_from_layout(layout)
@@ -159,39 +217,31 @@ class VideoProcessor:
                     zone_defs = cls._build_zone_definitions(venue.zones)
                     calibration_homography = venue.calibration_homography
 
-        if not os.path.exists(video_path):
-            logger.error("Video file path does not exist on disk", path=video_path)
+        source = create_video_source(video_path, base_dir=get_settings().videos_dir)
+        if not source.open():
+            logger.error("Could not open video source", path=video_path)
             async with session_factory() as session:
                 job = await session.get(ProcessingJob, job_id)
                 if job:
                     job.status = "FAILED"
-                    job.error_message = f"File {video_path} does not exist"
+                    job.error_message = f"Could not open video source: {video_path}"
                     await session.commit()
             return
 
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            logger.error("Could not open video file with OpenCV", path=video_path)
-            async with session_factory() as session:
-                job = await session.get(ProcessingJob, job_id)
-                if job:
-                    job.status = "FAILED"
-                    job.error_message = "OpenCV could not open video file"
-                    await session.commit()
-            return
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-        video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
-        video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
-        duration = float(total_frames) / fps if fps > 0 else 0.0
+        meta = source.metadata
+        fps = meta.fps if meta and meta.fps > 0 else 25.0
+        total_frames = meta.total_frames or 0
+        video_w = meta.width or 1920
+        video_h = meta.height or 1080
+        duration = meta.duration_seconds or (float(total_frames) / fps if fps > 0 else 0.0)
 
         sample_step = max(1, int(round(fps / max(sample_fps, 0.05))))
-        total_sampled_frames = max(1, total_frames // sample_step)
+        total_sampled_frames = max(1, total_frames // sample_step) if total_frames > 0 else 100
 
         mapper = ZoneMapper(zones=zone_defs, calibration_homography=calibration_homography)
         tracker = ByteTracker(track_high_thresh=0.45, track_low_thresh=0.20, match_iou_thresh=0.2)
         analytics_engine = CrowdAnalyticsEngine(mapper)
+        analytics_engine.perspective = camera_perspective
         prediction_engine = PredictionEngine(event_id=event_id, horizons=[30, 60, 180, 300])
         risk_engine = RiskEngine(event_id=event_id)
         alert_service = AlertService()
@@ -204,16 +254,25 @@ class VideoProcessor:
         recs_cooldown: dict[tuple[str, str], float] = {}
 
         try:
-            while cap.isOpened() and cls._active_jobs.get(job_id, False):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                if frame_idx % sample_step != 0:
-                    frame_idx += 1
+            while cls._active_jobs.get(job_id, False):
+                if cls._paused_jobs.get(job_id, False):
+                    await asyncio.sleep(0.2)
                     continue
 
-                v_ts = float(frame_idx) / fps
+                v_frame = source.read_frame()
+                if v_frame is None:
+                    if source.state in (SourceState.STOPPED, SourceState.FAILED):
+                        break
+                    await asyncio.sleep(0.01)
+                    continue
+
+                frame = v_frame.frame
+                v_ts = v_frame.timestamp_sec
+                frame_idx = v_frame.frame_index
+
+                if frame_idx % sample_step != 0:
+                    continue
+
                 dt = float(sample_step) / fps
 
                 # Optical flow motion compensation
@@ -237,6 +296,7 @@ class VideoProcessor:
                     video_timestamp_sec=v_ts,
                     dt_sec=dt,
                 )
+                accum_grid = analytics_engine.get_accumulated_heatmap_grid()
 
                 # Predictions
                 predictions = prediction_engine.update_and_predict(
@@ -394,6 +454,13 @@ class VideoProcessor:
                     "video_timestamp_sec": round(v_ts, 2),
                     "progress_pct": round(progress, 1),
                     "total_people": people_count,
+                    "frame_w": video_w,
+                    "frame_h": video_h,
+                    "perspective": camera_perspective,
+                    "detections": serialized_dets,
+                    "heatmap_grid": heatmap_grid,
+                    "accumulated_heatmap_grid": accum_grid,
+                    "predicted_heatmaps": predicted_heatmaps,
                     "snapshots": [
                         {
                             "zone_id": s.zone_id,
@@ -414,8 +481,6 @@ class VideoProcessor:
                         }
                         for s in snapshots
                     ],
-                    "heatmap_grid": heatmap_grid,
-                    "predicted_heatmaps": predicted_heatmaps,
                     "predictions": [
                         {
                             "zone_id": p.zone_id,
@@ -442,6 +507,9 @@ class VideoProcessor:
                         for a in new_alerts
                     ],
                 }
+                cls._latest_telemetry[event_id] = ws_payload
+                cls._latest_telemetry[job_id] = ws_payload
+
                 await ws_manager.broadcast(event_id, ws_payload)
 
                 # Dispatch analytics & recommendations to AI Agent (async background non-blocking)
@@ -456,9 +524,11 @@ class VideoProcessor:
                 )
 
                 frame_idx += 1
-                await asyncio.sleep(0.001)
+                # Pace the stream processing to provide real-time playback experience to UI
+                pace = min(0.35, max(0.04, 1.0 / max(sample_fps, 0.1)))
+                await asyncio.sleep(pace)
 
-            cap.release()
+            source.close()
 
             # Mark job complete if not explicitly stopped
             async with session_factory() as session:
@@ -467,8 +537,12 @@ class VideoProcessor:
                     if job.status != "STOPPED":
                         job.status = "COMPLETED"
                         job.progress_pct = 100.0
-                    job.completed_at = datetime.utcnow()
-                    await session.commit()
+                    job.completed_at = datetime.now(timezone.utc)
+                task = await session.get(Task, event_id)
+                if task and job and job.status == "COMPLETED":
+                    task.state = "COMPLETED"
+                    task.updated_at = datetime.now(timezone.utc)
+                await session.commit()
 
             await ws_manager.broadcast(
                 event_id,
@@ -484,8 +558,8 @@ class VideoProcessor:
 
         except Exception as exc:
             logger.error("Exception during video processing", job_id=job_id, error=str(exc))
-            if cap.isOpened():
-                cap.release()
+            if "source" in locals() and source is not None:
+                source.close()
             async with session_factory() as session:
                 job = await session.get(ProcessingJob, job_id)
                 if job:
@@ -498,7 +572,41 @@ class VideoProcessor:
             )
         finally:
             cls._active_jobs[job_id] = False
+            cls._paused_jobs.pop(job_id, None)
             cls._running_tasks.pop(job_id, None)
+
+    @staticmethod
+    def _build_zone_definitions_from_snapshot(zones_data: list[Any]) -> list[ZoneDefinition]:
+        defs = []
+        for z in zones_data:
+            if isinstance(z, dict):
+                zid = str(z.get("zone_id") or z.get("id") or uuid.uuid4())
+                zname = str(z.get("zone_name") or z.get("name") or zid)
+                raw_pts = z.get("polygon_points") or z.get("boundary_coordinates") or []
+                pts = []
+                for p in raw_pts:
+                    if isinstance(p, dict) and "x" in p and "y" in p:
+                        pts.append([float(p["x"]), float(p["y"])])
+                    elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                        pts.append([float(p[0]), float(p[1])])
+                cap = int(z.get("max_capacity") or z.get("capacity") or 50)
+                area = float(z["area_sqm"]) if z.get("area_sqm") else None
+                defs.append(
+                    ZoneDefinition(
+                        zone_id=zid,
+                        name=zname,
+                        polygon_points=pts,
+                        capacity=cap,
+                        area_sqm=area,
+                        is_entry=bool(z.get("is_entry", False)),
+                        is_exit=bool(z.get("is_exit", False)),
+                        is_emergency_exit=bool(z.get("is_emergency_exit", False)),
+                        adjacent_zone_ids=list(z.get("adjacent_zone_ids", [])),
+                        color=str(z.get("color") or "#0d9488"),
+                        monitoring_priority=str(z.get("monitoring_priority") or "ROUTINE"),
+                    )
+                )
+        return defs
 
     @staticmethod
     def _build_zone_definitions(zones: list[Zone]) -> list[ZoneDefinition]:

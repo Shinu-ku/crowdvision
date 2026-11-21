@@ -25,7 +25,8 @@ class AIAgentClient:
         return headers
 
     def _base_url(self) -> str:
-        return get_settings().ai_agent_url.rstrip("/")
+        settings = get_settings()
+        return (getattr(settings, "ai_agent_url", None) or getattr(settings, "ai_agent_base_url", "http://localhost:8001")).rstrip("/")
 
     def _timeout(self) -> float:
         return get_settings().ai_agent_timeout_seconds
@@ -34,7 +35,7 @@ class AIAgentClient:
         return get_settings().ai_agent_enabled
 
     def _client(self, timeout: Optional[float] = None) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=timeout or self._timeout())
+        return httpx.AsyncClient(timeout=timeout or self._timeout(), trust_env=False)
 
     async def get_health(self) -> dict[str, Any]:
         if not self._enabled():

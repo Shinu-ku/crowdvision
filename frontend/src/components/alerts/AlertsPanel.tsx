@@ -127,15 +127,17 @@ export const AlertsPanel: React.FC<AlertsPanelProps> = ({
                 </div>
 
                 {/* Action Buttons */}
-                {alert.status === 'ACTIVE' && (
+                {alert.status !== 'RESOLVED' && (
                   <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleStatusChange(alert.id, 'ACKNOWLEDGED')}
-                      disabled={updatingId === alert.id}
-                      className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-sans transition-colors"
-                    >
-                      Acknowledge
-                    </button>
+                    {alert.status === 'ACTIVE' && (
+                      <button
+                        onClick={() => handleStatusChange(alert.id, 'ACKNOWLEDGED')}
+                        disabled={updatingId === alert.id}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-sans transition-colors"
+                      >
+                        Acknowledge
+                      </button>
+                    )}
                     <button
                       onClick={() => handleStatusChange(alert.id, 'RESOLVED')}
                       disabled={updatingId === alert.id}

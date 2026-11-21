@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 
     database_url: str = "sqlite+aiosqlite:///./crowdvision_main.db"
+    db_echo: bool = False
     data_retention_days: int = 30
 
     upload_dir: str = "uploads"
@@ -45,7 +46,16 @@ class Settings(BaseSettings):
     forecast_horizons_seconds: str = "60,180,300"
     min_history_for_prediction: int = 5
 
-    ai_agent_base_url: str = "http://localhost:8100"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    llm_provider: str = "auto"
+    llm_timeout_seconds: float = 30.0
+    llm_enabled: bool = True
+
+    ai_agent_base_url: str = "http://localhost:8001"
+    ai_agent_url: str = "http://localhost:8001"
     ai_agent_api_key: str = "CHANGE_ME_TO_A_RANDOM_SECRET_KEY"
     ai_agent_timeout_seconds: float = 5.0
     ai_agent_enabled: bool = True
