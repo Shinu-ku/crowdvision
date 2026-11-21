@@ -183,8 +183,8 @@ def build_spoken_announcement(alert: Any, language: Optional[str] = None) -> Opt
     else:
         sev_norm = sev_upper
 
-    # Determine target language: argument -> alert field -> settings -> default "en"
-    target_lang = language or alert_lang
+    # Determine target language: alert specific -> parameter -> settings -> default "en"
+    target_lang = alert_lang or language
     if not target_lang:
         try:
             from app.config import get_settings
