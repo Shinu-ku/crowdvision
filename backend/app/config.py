@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     elevenlabs_output_format: str = "mp3_44100_128"
     elevenlabs_enabled: bool = True
     elevenlabs_timeout_seconds: float = 15.0
+    elevenlabs_language: str = "en"
+    elevenlabs_agent_id: str = "agent_5901m7wxc43gfgrsnrqhw6wdjcqt"
 
     @property
     def effective_port(self) -> int:

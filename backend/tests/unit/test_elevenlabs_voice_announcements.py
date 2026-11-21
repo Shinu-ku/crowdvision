@@ -593,3 +593,42 @@ async def test_alert_announcement_api_endpoints():
     # Cleanup audio file
     if test_audio_path.exists():
         test_audio_path.unlink()
+
+
+def test_announcement_builder_bilingual_english_and_hindi():
+    """Verify that both English and Hindi generate the exact natural announcements required by specifications."""
+    alert = {
+        "severity": "MEDIUM",
+        "zone_name": "Main Stage",
+        "category": "occupancy_warning",
+        "title": "High crowd density",
+        "supporting_measurements": {
+            "occupancy": 82,
+        },
+    }
+
+    # 1. English generation
+    spoken_en = build_spoken_announcement(alert, language="en")
+    assert spoken_en == "Attention. High crowd density detected at Main Stage. Current occupancy is 82 percent."
+
+    # 2. Hindi generation
+    spoken_hi = build_spoken_announcement(alert, language="hi")
+    assert spoken_hi == "सावधान। मेन स्टेज पर भीड़ का घनत्व अधिक है। वर्तमान ऑक्यूपेंसी 82 प्रतिशत है।"
+
+
+def test_announcement_builder_hindi_critical_with_action():
+    """Verify Critical alert with zone and action produces natural Hindi announcement."""
+    alert = {
+        "severity": "CRITICAL",
+        "zone_name": "North Entrance",
+        "category": "critical_density",
+        "supporting_measurements": {
+            "recommended_action": "Redirect incoming visitors to Entrance B immediately",
+        },
+    }
+    spoken_hi = build_spoken_announcement(alert, language="hi")
+    assert spoken_hi is not None
+    assert spoken_hi.startswith("गंभीर चेतावनी।")
+    assert "उत्तर प्रवेश द्वार पर गंभीर भीड़ जमाव देखा गया है।" in spoken_hi
+    assert "आने वाले आगंतुकों को तुरंत प्रवेश द्वार बी पर पुनर्निर्देशित करें।" in spoken_hi
+

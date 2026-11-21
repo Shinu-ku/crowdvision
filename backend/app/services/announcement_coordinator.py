@@ -88,7 +88,8 @@ class AnnouncementCoordinator:
             return None
 
         # 2. Build spoken announcement text
-        spoken_text = build_spoken_announcement(alert_source_data)
+        target_lang = getattr(settings, "elevenlabs_language", "en")
+        spoken_text = build_spoken_announcement(alert_source_data, language=target_lang)
         if not spoken_text:
             logger.info("Alert data not eligible for spoken announcement", alert_id=alert_id)
             return None

@@ -85,14 +85,51 @@ Open `http://localhost:5173` in your browser.
 Both subsystems include comprehensive automated unit, integration, security, and end-to-end workflow test suites (86 passing tests total):
 
 ```bash
-# Run all backend tests (53 passing tests, including 29-step e2e release workflow)
+# Run all backend tests (including ElevenLabs voice announcement test suite)
 python -m pytest -o pythonpath=backend backend/tests/ -v
+
+# Run backend ElevenLabs voice tests specifically (24 passing unit tests)
+python -m pytest -o pythonpath=backend backend/tests/unit/test_elevenlabs_voice_announcements.py -v
 
 # Run AI agent tests (33 passing tests)
 python -m pytest -o pythonpath=ai_agent ai_agent/tests/ -v
 
-# Verify frontend build
+# Run frontend audio authority, batching, and queue tests (30 passing tests)
+node frontend/tests/singleVoiceAuthority.test.js
+node frontend/tests/alertBatchManager.test.js
+node frontend/tests/voiceAnnouncement.test.js
+
+# Verify frontend production build
 npm --prefix frontend run build
+```
+
+---
+
+## ElevenLabs Voice Announcements Integration
+
+CrowdVision includes a production-grade operational voice announcement system powered by the ElevenLabs Text-to-Speech API.
+
+### Core Architecture & Capabilities
+1. **17-Second Alert Aggregation Window**: Upon arrival of the first eligible alert, a fixed 17-second collection window opens. Incoming alerts are grouped by stable zone ID.
+2. **Latest-Alert-Per-Zone Selection**: Within the 17-second window, older alerts for the same zone are replaced with the latest update. When the window expires, only the latest alert per zone is announced, preserving the order in which zones first appeared.
+3. **Critical Escalation Policy**: Critical alerts trigger prompt batch finalization without waiting for the full 17-second timer, while respecting currently playing audio without overlap.
+4. **Absolute Single Voice Authority**: Announcements play strictly sequentially (`MAX_CONCURRENT_ACTIVE_PLAYBACKS === 1`). Two voices can NEVER speak simultaneously.
+5. **Cross-Tab & Browser Scope**: Enforces single playback ownership across browser tabs using the Web Locks API (`navigator.locks.request('crowdvision_single_voice_authority')`) and `BroadcastChannel`. Only the elected authority tab plays audio.
+6. **Bilingual Support (English & Hindi)**:
+   - English: `"Attention. High crowd density detected at Main Stage. Current occupancy is 82 percent."`
+   - Hindi: `"सावधान। मेन स्टेज पर भीड़ का घनत्व अधिक है। वर्तमान ऑक्यूपेंसी 82 प्रतिशत है।"`
+7. **Failure Isolation**: TTS or audio errors never block the alert engine, database persistence, dashboard updates, or subsequent audio queue items.
+
+### Configuration
+Configure the following in `backend/.env`:
+```ini
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_VOICE_ID=tnSpp4vdxKPjI9w0GnoV
+ELEVENLABS_MODEL_ID=eleven_flash_v2_5
+ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
+ELEVENLABS_ENABLED=true
+ELEVENLABS_LANGUAGE=en  # Set to "en" for English, "hi" for Hindi
+ELEVENLABS_AGENT_ID=agent_5901m7wxc43gfgrsnrqhw6wdjcqt
 ```
 
 ---
