@@ -54,6 +54,7 @@ backend/crowdvision_main.db
 !/crowdvision_main.db
 
 # ──── Media, Uploads & User Footage ────
+uploads/
 backend/uploads/videos/*
 !backend/uploads/videos/.gitkeep
 # Preserve Railway CCTV analysis demonstration video
@@ -62,6 +63,8 @@ backend/uploads/images/*
 !backend/uploads/images/.gitkeep
 backend/uploads/floorplans/*
 !backend/uploads/floorplans/.gitkeep
+backend/uploads/announcements/*
+!backend/uploads/announcements/.gitkeep
 backend/uploads/processed/*
 !backend/uploads/processed/.gitkeep
 # Preserve precomputed Railway telemetry cache (<50KB)

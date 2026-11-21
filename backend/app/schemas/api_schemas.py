@@ -592,6 +592,23 @@ class AlertResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class AlertAnnouncementResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    alert_id: str
+    status: str
+    spoken_text: str
+    audio_url: Optional[str] = None
+    voice_id: Optional[str] = None
+    model_id: Optional[str] = None
+    error_message: Optional[str] = None
+    play_count: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    played_at: Optional[datetime] = None
+
+
 class AlertAcknowledgeRequest(BaseModel):
     note: Optional[str] = None
 
