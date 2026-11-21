@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +23,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+    port: Optional[int] = None
+    data_dir: Optional[str] = None
     app_log_level: str = "INFO"
 
     jwt_secret_key: str = "CHANGE_ME_CROWDVISION_JWT_SECRET_2026"
@@ -61,6 +64,12 @@ class Settings(BaseSettings):
     ai_agent_enabled: bool = True
 
     @property
+    def effective_port(self) -> int:
+        if self.port is not None:
+            return self.port
+        return self.app_port
+
+    @property
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
@@ -73,26 +82,32 @@ class Settings(BaseSettings):
         return Path(__file__).resolve().parent.parent
 
     @property
+    def effective_storage_root(self) -> Path:
+        if self.data_dir:
+            return Path(self.data_dir).resolve()
+        return self.base_dir
+
+    @property
     def videos_dir(self) -> Path:
-        p = self.base_dir / self.upload_dir / "videos"
+        p = self.effective_storage_root / self.upload_dir / "videos"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
     def floorplans_dir(self) -> Path:
-        p = self.base_dir / self.upload_dir / "floorplans"
+        p = self.effective_storage_root / self.upload_dir / "floorplans"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
     def processed_dir(self) -> Path:
-        p = self.base_dir / self.upload_dir / "processed"
+        p = self.effective_storage_root / self.upload_dir / "processed"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
     def images_dir(self) -> Path:
-        p = self.base_dir / self.upload_dir / "images"
+        p = self.effective_storage_root / self.upload_dir / "images"
         p.mkdir(parents=True, exist_ok=True)
         return p
 

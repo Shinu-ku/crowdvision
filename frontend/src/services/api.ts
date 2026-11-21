@@ -17,7 +17,8 @@ import {
   CopilotQueryResponse,
 } from '../types';
 
-const API_BASE = '/api';
+const RAW_API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || '';
+const API_BASE = (RAW_API_BASE ? String(RAW_API_BASE).replace(/\/$/, '') : '') + '/api';
 
 class ApiService {
   private token: string | null = null;

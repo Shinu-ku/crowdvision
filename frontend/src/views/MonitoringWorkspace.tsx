@@ -177,9 +177,10 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
   useEffect(() => {
     if (!activeTask) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws/${activeTask.id}`;
+    const defaultWsHost = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+    const rawWs = (import.meta as any).env?.VITE_WS_BASE_URL || defaultWsHost;
+    const baseWs = String(rawWs).replace(/\/$/, '');
+    const wsUrl = `${baseWs}/ws/${activeTask.id}`;
     let ws: WebSocket | null = null;
     let pingInterval: any = null;
     let isCancelled = false;
@@ -701,23 +702,27 @@ export const MonitoringWorkspace: React.FC<MonitoringWorkspaceProps> = ({
   };
 
   const videoSourceUrl = useMemo(() => {
+    const rawApi = (import.meta as any).env?.VITE_API_BASE_URL || '';
+    const apiPrefix = rawApi ? String(rawApi).replace(/\/$/, '') : '';
     if (!activeTask) return '';
     if (activeTask.id === 'task_railway_cctv_analysis') {
-      return '/api/tasks/task_railway_cctv_analysis/video/stream';
+      return `${apiPrefix}/api/tasks/task_railway_cctv_analysis/video/stream`;
     }
     if (activeTask.video_config?.stream_url) {
-      return activeTask.video_config.stream_url;
+      const u = activeTask.video_config.stream_url;
+      return u.startsWith('/') ? `${apiPrefix}${u}` : u;
     }
     if (activeTask.id) {
-      return `/api/tasks/${activeTask.id}/video/stream`;
+      return `${apiPrefix}/api/tasks/${activeTask.id}/video/stream`;
     }
     if (activeTask.video_config?.stored_path) {
-      return activeTask.video_config.stored_path;
+      const u = activeTask.video_config.stored_path;
+      return u.startsWith('/') ? `${apiPrefix}${u}` : u;
     }
     if (activeTask.video_config?.filename) {
-      return `/uploads/videos/${activeTask.video_config.filename}`;
+      return `${apiPrefix}/uploads/videos/${activeTask.video_config.filename}`;
     }
-    return '/uploads/videos/sample_crowd_festival.mp4';
+    return `${apiPrefix}/uploads/videos/sample_crowd_festival.mp4`;
   }, [activeTask?.id, activeTask?.video_config]);
 
   const handleTogglePlay = () => {

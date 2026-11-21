@@ -16,9 +16,10 @@ class WebSocketClient {
     this.eventId = eventId;
     this.isExplicitlyClosed = false;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws/${eventId}`;
+    const defaultWsHost = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+    const rawWs = (import.meta as any).env?.VITE_WS_BASE_URL || defaultWsHost;
+    const baseWs = String(rawWs).replace(/\/$/, '');
+    const wsUrl = `${baseWs}/ws/${eventId}`;
 
     try {
       this.ws = new WebSocket(wsUrl);

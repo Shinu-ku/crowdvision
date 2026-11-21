@@ -33,8 +33,22 @@ _session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
 async def init_db() -> None:
     global _engine, _session_factory
+    from pathlib import Path
     settings = get_settings()
     url = settings.database_url
+
+    # Normalize Render PostgreSQL connection strings to asyncpg
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    # Route SQLite to persistent data directory if configured
+    if "sqlite" in url and settings.data_dir:
+        p_dir = Path(settings.data_dir).resolve()
+        p_dir.mkdir(parents=True, exist_ok=True)
+        db_file = p_dir / "crowdvision_main.db"
+        url = f"sqlite+aiosqlite:///{db_file}"
 
     if "sqlite" in url:
         _engine = create_async_engine(url, echo=False, future=True)

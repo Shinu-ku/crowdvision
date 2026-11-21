@@ -76,12 +76,13 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins_list,
+        allow_origin_regex=r"https://.*\.onrender\.com",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    uploads_root = settings.base_dir / settings.upload_dir
+    uploads_root = settings.effective_storage_root / settings.upload_dir
     uploads_root.mkdir(parents=True, exist_ok=True)
     app.mount("/uploads", StaticFiles(directory=str(uploads_root)), name="uploads")
 
@@ -102,17 +103,25 @@ def create_app() -> FastAPI:
     app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
     app.include_router(chat.router, prefix="/api/chat", tags=["AI Analyst"])
     app.include_router(health.router, prefix="/api/health", tags=["Health"])
+    app.include_router(health.router, prefix="/health", tags=["Health"])
     app.include_router(ws_router, tags=["WebSocket"])
 
     # Mount frontend static distribution if built
+    from pathlib import Path
     dist_dir = settings.base_dir.parent / "frontend" / "dist"
+    if not dist_dir.exists():
+        dist_dir = Path("frontend/dist").resolve()
+
     if dist_dir.exists():
         assets_dir = dist_dir / "assets"
         if assets_dir.exists():
             app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-        @app.get("/", tags=["Frontend"])
-        async def serve_index():
+        @app.get("/{full_path:path}", tags=["Frontend"])
+        async def serve_spa_and_static(full_path: str):
+            target = dist_dir / full_path
+            if full_path and target.is_file():
+                return FileResponse(target)
             return FileResponse(dist_dir / "index.html")
     else:
         @app.get("/", tags=["Root"])
