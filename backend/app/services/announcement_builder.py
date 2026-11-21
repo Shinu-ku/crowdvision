@@ -161,7 +161,7 @@ def build_spoken_announcement(alert: Any, language: Optional[str] = None) -> Opt
         title = getattr(alert, "title", "") or ""
         description = getattr(alert, "description", "") or ""
         measurements = getattr(alert, "supporting_measurements", {}) or {}
-        alert_lang = getattr(alert, "language", None)
+        alert_lang = getattr(alert, "language", None) or measurements.get("language")
 
     if not isinstance(measurements, dict):
         measurements = {}
