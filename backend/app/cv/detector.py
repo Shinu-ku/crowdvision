@@ -221,18 +221,47 @@ class PersonDetector:
 
         # Robust OpenCV fallback (HOG + background subtraction)
         self.backend_name = "opencv_hog_motion_fallback"
-        self._hog = cv2.HOGDescriptor()
-        self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=300, varThreshold=25, detectShadows=True
-        )
+        self._hog = None
+        try:
+            hog_cls = getattr(cv2, "HOGDescriptor", None)
+            svm_fn = getattr(cv2, "HOGDescriptor_getDefaultPeopleDetector", None)
+            if hog_cls is None:
+                try:
+                    import cv2.objdetect as objdetect
+                    hog_cls = getattr(objdetect, "HOGDescriptor", None)
+                    svm_fn = getattr(objdetect, "HOGDescriptor_getDefaultPeopleDetector", None)
+                except Exception:
+                    pass
+
+            if hog_cls is not None and svm_fn is not None:
+                self._hog = hog_cls()
+                self._hog.setSVMDetector(svm_fn())
+                logger.info("OpenCV HOG people detector initialized successfully")
+            else:
+                logger.info("cv2.HOGDescriptor not present; using motion and contour detector")
+        except Exception as e:
+            logger.warning("Failed to initialize HOGDescriptor; falling back to motion detection", error=str(e))
+            self._hog = None
+
+        try:
+            if hasattr(cv2, "createBackgroundSubtractorMOG2"):
+                self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+                    history=300, varThreshold=25, detectShadows=True
+                )
+        except Exception as e:
+            logger.warning("Failed to initialize BackgroundSubtractorMOG2", error=str(e))
+            self._bg_subtractor = None
+
         logger.info("Using robust OpenCV fallback person detector", backend=self.backend_name)
 
     def reset_temporal_state(self) -> None:
-        if self._bg_subtractor is not None:
-            self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-                history=300, varThreshold=25, detectShadows=True
-            )
+        try:
+            if hasattr(cv2, "createBackgroundSubtractorMOG2"):
+                self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+                    history=300, varThreshold=25, detectShadows=True
+                )
+        except Exception:
+            pass
 
     def detect(
         self, frame: np.ndarray, perspective: str = "FIXED_CCTV"
@@ -348,53 +377,85 @@ class PersonDetector:
         h, w = frame.shape[:2]
         dets: list[Detection] = []
 
-        # 1. HOG detector
-        rects, weights = self._hog.detectMultiScale(
-            frame, winStride=(8, 8), padding=(8, 8), scale=1.05
-        )
-        for (rx, ry, rw, rh), weight in zip(rects, weights):
-            conf = min(0.95, max(0.40, float(weight) * 0.4 + 0.5))
-            if conf >= self.confidence_threshold:
-                dets.append(
-                    Detection(
-                        bbox=(float(rx), float(ry), float(rx + rw), float(ry + rh)),
-                        confidence=conf,
-                    )
+        # 1. HOG detector (if available)
+        if self._hog is not None:
+            try:
+                rects, weights = self._hog.detectMultiScale(
+                    frame, winStride=(8, 8), padding=(8, 8), scale=1.05
                 )
-
-        # 2. Motion / Background subtraction blobs
-        fg_mask = self._bg_subtractor.apply(frame)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
-        contours, _ = cv2.findContours(fg_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < 100:
-                continue
-            bx, by, bw, bh = cv2.boundingRect(c)
-            aspect = bh / max(bw, 1.0)
-            conf = min(0.85, 0.45 + (area / float(w * h)) * 10.0)
-
-            # Cluster splitting for multiple people in a blob
-            est_single_area = max(400.0, (w * h) * 0.003)
-            if area > est_single_area * 1.8 and bw > bh:
-                n_people = min(5, max(2, int(round(area / est_single_area))))
-                sub_w = bw / float(n_people)
-                for k in range(n_people):
-                    sub_x1 = bx + k * sub_w
-                    dets.append(
-                        Detection(
-                            bbox=(float(sub_x1), float(by), float(sub_x1 + sub_w), float(by + bh)),
-                            confidence=max(0.42, conf - 0.08),
+                for (rx, ry, rw, rh), weight in zip(rects, weights):
+                    conf = min(0.95, max(0.40, float(weight) * 0.4 + 0.5))
+                    if conf >= self.confidence_threshold:
+                        dets.append(
+                            Detection(
+                                bbox=(float(rx), float(ry), float(rx + rw), float(ry + rh)),
+                                confidence=conf,
+                            )
                         )
-                    )
-            else:
-                dets.append(
-                    Detection(
-                        bbox=(float(bx), float(by), float(bx + bw), float(by + bh)),
-                        confidence=conf,
-                    )
+            except Exception:
+                pass
+
+        # 2. Motion / Background subtraction blobs (if available)
+        if self._bg_subtractor is not None:
+            try:
+                fg_mask = self._bg_subtractor.apply(frame)
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
+                contours, _ = cv2.findContours(fg_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                for c in contours:
+                    area = cv2.contourArea(c)
+                    if area < 100:
+                        continue
+                    bx, by, bw, bh = cv2.boundingRect(c)
+                    aspect = bh / max(bw, 1.0)
+                    conf = min(0.85, 0.45 + (area / float(w * h)) * 10.0)
+
+                    # Cluster splitting for multiple people in a blob
+                    est_single_area = max(400.0, (w * h) * 0.003)
+                    if area > est_single_area * 1.8 and bw > bh:
+                        n_people = min(5, max(2, int(round(area / est_single_area))))
+                        sub_w = bw / float(n_people)
+                        for k in range(n_people):
+                            sub_x1 = bx + k * sub_w
+                            dets.append(
+                                Detection(
+                                    bbox=(float(sub_x1), float(by), float(sub_x1 + sub_w), float(by + bh)),
+                                    confidence=max(0.42, conf - 0.08),
+                                )
+                            )
+                    else:
+                        dets.append(
+                            Detection(
+                                bbox=(float(bx), float(by), float(bx + bw), float(by + bh)),
+                                confidence=conf,
+                            )
+                        )
+            except Exception:
+                pass
+
+        # 3. Adaptive thresholding contour fallback if no detections found yet
+        if len(dets) == 0:
+            try:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+                blur = cv2.GaussianBlur(gray, (5, 5), 0)
+                thresh = cv2.adaptiveThreshold(
+                    blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
                 )
+                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for c in contours:
+                    area = cv2.contourArea(c)
+                    if 150 < area < (w * h * 0.15):
+                        bx, by, bw, bh = cv2.boundingRect(c)
+                        aspect = bh / max(bw, 1.0)
+                        if 1.0 <= aspect <= 4.5:
+                            dets.append(
+                                Detection(
+                                    bbox=(float(bx), float(by), float(bx + bw), float(by + bh)),
+                                    confidence=0.50,
+                                )
+                            )
+            except Exception:
+                pass
 
         return _nms_boxes(dets, iou_threshold=0.40)
