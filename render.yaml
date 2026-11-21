@@ -7,23 +7,47 @@ services:
   - type: web
     name: crowdvision
     runtime: docker
-    plan: starter
+    plan: starter # Note: Starter plan ($7/mo) supports Persistent Disk. Change to 'free' if deploying without persistent disk.
     region: oregon
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
+      # Application Configuration
       - key: APP_ENV
         value: production
       - key: APP_LOG_LEVEL
         value: INFO
       - key: JWT_SECRET_KEY
         generateValue: true
+
+      # AI Copilot & LLM Configuration
       - key: LLM_PROVIDER
         value: auto
       - key: GEMINI_API_KEY
         sync: false
+
+      # Storage & Persistence (Mapped to persistent disk)
       - key: DATA_DIR
         value: /data
+
+      # ElevenLabs Voice Alert Announcements
+      - key: ELEVENLABS_ENABLED
+        value: "true"
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: tnSpp4vdxKPjI9w0GnoV
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_flash_v2_5
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        value: mp3_44100_128
+      - key: ELEVENLABS_LANGUAGE
+        value: en
+      - key: ELEVENLABS_AGENT_ID
+        value: agent_5901m7wxc43gfgrsnrqhw6wdjcqt
+
+    # Persistent storage for SQLite database, CCTV video files, floorplans, and cached ElevenLabs MP3 audio
+    # (If deploying on Render Free Tier without persistent disk, comment out or remove the disk section below)
     disk:
       name: crowdvision-data
       mountPath: /data
