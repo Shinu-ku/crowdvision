@@ -653,11 +653,11 @@ async def get_task_telemetry(
     import json
     from app.analytics.zone_mapper import ZoneMapper
 
-    # If live processing is actively running in memory with 36x64 grid and no explicit ts is requested
+    # If live processing is actively running in memory and no explicit ts is requested
     live = VideoProcessor.get_latest_telemetry(task_id)
     if live and live.get("total_people", 0) > 0 and ts is None:
         grid = live.get("heatmap_grid", [])
-        if grid and len(grid) == 36 and len(grid[0]) == 64:
+        if grid and len(grid) > 0:
             return live
 
     # Look up best available completed or processed job for this task

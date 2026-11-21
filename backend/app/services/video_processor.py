@@ -130,7 +130,21 @@ class VideoProcessor:
 
     @classmethod
     def get_latest_telemetry(cls, key: str) -> Optional[dict[str, Any]]:
-        return cls._latest_telemetry.get(key)
+        telem = cls._latest_telemetry.get(key)
+        if telem:
+            return telem
+        if key == "task_railway_cctv_analysis":
+            cached_file = get_settings().processed_dir / "railway_demo_telemetry.json"
+            if cached_file.exists():
+                try:
+                    import json
+                    with open(cached_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        cls._latest_telemetry[key] = data
+                        return data
+                except Exception:
+                    pass
+        return None
 
     @classmethod
     async def start_processing(

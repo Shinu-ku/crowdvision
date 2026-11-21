@@ -55,9 +55,12 @@ async def setup_railway_demo():
 
     # 1. Locate and validate railway CCTV video
     possible_paths = [
-        Path(r"c:\Users\Asus\Desktop\crowd work\cctvfootagerailway.mp4"),
+        settings.base_dir.parent / "cctvfootagerailway.mp4",
+        Path("cctvfootagerailway.mp4").resolve(),
+        Path(r"d:\programming\Projects\crowdvision01\cctvfootagerailway.mp4"),
         settings.videos_dir / "cctvfootagerailway.mp4",
         settings.videos_dir / "railway_cctv_analysis.mp4",
+        Path(r"c:\Users\Asus\Desktop\crowd work\cctvfootagerailway.mp4"),
     ]
 
     src_video = None
@@ -191,11 +194,26 @@ async def setup_railway_demo():
             v_rec.height = height
 
         # B. Register / Update VenueLayout
+        v_venue = await session.get(Venue, "venue-railway-station")
+        if not v_venue:
+            v_venue = await session.get(Venue, "venue-central-arena")
+        if not v_venue:
+            v_venue = Venue(
+                id="venue-railway-station",
+                name="Central Railway Terminal",
+                location="Platform 1 - Suburban EMU Line",
+                total_capacity=1000,
+                is_calibrated=True,
+            )
+            session.add(v_venue)
+            await session.flush()
+
         layout_id = "layout_railway_cctv"
         l_rec = await session.get(VenueLayout, layout_id)
         if not l_rec:
             l_rec = VenueLayout(
                 id=layout_id,
+                venue_id=v_venue.id,
                 name="Railway Platform 1 - Central EMU Line Layout",
                 description="Real spatial layout from CCTV footage of Platform 1 Mumbai Suburban EMU Line (Coach 6008B), including boarding edge, transit walkway, escalator concourse, and yellow track clearance.",
                 canvas_width=width,
@@ -207,6 +225,7 @@ async def setup_railway_demo():
             )
             session.add(l_rec)
         else:
+            l_rec.venue_id = v_venue.id
             l_rec.zones_data = zones_data
             l_rec.canvas_width = width
             l_rec.canvas_height = height
@@ -545,6 +564,18 @@ async def setup_railway_demo():
             print("Updated existing genuine crowd incident alert (deduplicated).")
 
         await session.commit()
+
+        # Trigger ElevenLabs voice announcement for this railway alert
+        try:
+            from app.services.announcement_coordinator import announcement_coordinator
+            await announcement_coordinator.process_new_alert(
+                alert_id=alert_id,
+                alert_dict_or_obj=alert_data,
+                event_id=task_id,
+            )
+            print("Triggered ElevenLabs voice announcement coordination for railway alert.")
+        except Exception as e:
+            print(f"Announcement trigger notice: {e}")
 
     await close_db()
     print("=" * 70)
